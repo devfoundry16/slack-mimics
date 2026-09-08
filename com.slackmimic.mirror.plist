@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.slackmimic.mirror</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Volumes/Work/Projects/Internal/slack-mimics/.venv/bin/slack-mimic</string>
+        <string>-v</string>
+        <string>--config</string>
+        <string>/Volumes/Work/Projects/Internal/slack-mimics/config.yaml</string>
+        <string>--env</string>
+        <string>/Volumes/Work/Projects/Internal/slack-mimics/.env</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Volumes/Work/Projects/Internal/slack-mimics</string>
+
+    <!-- Start at login and restart automatically if it ever exits. -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Volumes/Work/Projects/Internal/slack-mimics/mirror.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Volumes/Work/Projects/Internal/slack-mimics/mirror.log</string>
+</dict>
+</plist>

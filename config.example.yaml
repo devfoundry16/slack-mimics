@@ -1,0 +1,27 @@
+# Slack Mimic configuration.
+#
+# Only channels listed here are mirrored — this is an explicit allowlist so
+# private channels / DMs are never mirrored by accident.
+#
+# Channel ids (the "C..." segment), NOT names. Find an HS channel id by opening
+# the channel in the browser and reading it from the URL.
+
+db_path: slackmimic.sqlite3
+
+# How often to poll each channel when the websocket transport is unavailable.
+poll_interval_seconds: 5
+
+# Prefer the realtime websocket; fall back to polling automatically if it fails.
+use_websocket: true
+
+# On a channel's first run, mirror this many days of history before going live.
+# 0 = start from now (only new messages). Restarts never re-backfill.
+backfill_days: 0
+
+channels:
+  - source: C0123ABCD   # HS #general
+    target: C0456WXYZ   # your #hs-general
+    label: general
+  # - source: C0789EFGH
+  #   target: C0987TUVW
+  #   label: announcements

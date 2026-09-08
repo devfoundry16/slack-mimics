@@ -1,0 +1,35 @@
+[project]
+name = "slack-mimic"
+version = "0.1.0"
+description = "Mirror messages from a restricted Slack workspace into your own workspace."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.27",
+    "websockets>=12.0",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0",
+    "aiosqlite>=0.20",
+]
+
+[project.scripts]
+slack-mimic = "slackmimic.app:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "respx>=0.21",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/slackmimic"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src"]
