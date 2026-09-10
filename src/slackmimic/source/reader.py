@@ -81,7 +81,7 @@ class SourceReader:
 
         for msg in messages:
             event = normalize.message_to_event(channel, msg)
-            if event is not None:
+            if event is not None and not await self._is_echo(event.channel, event.ts):
                 await self._queue.put(event)
                 emitted += 1
             newest = max(newest, str(msg.get("ts", "0")), key=float)
@@ -105,10 +105,18 @@ class SourceReader:
             if str(msg.get("ts")) == parent_ts:
                 continue
             event = normalize.message_to_event(channel, msg)
-            if event is not None:
+            if event is not None and not await self._is_echo(event.channel, event.ts):
                 await self._queue.put(event)
                 emitted += 1
         return emitted
+
+    async def _is_echo(self, channel: str, ts: str) -> bool:
+        """True if this HS message was posted by our own reverse relay.
+
+        Without this, a message John approved into HS would be read back here
+        and mirrored into vanta-core, duplicating his original.
+        """
+        return await self._store.is_reverse_post(channel, ts)
 
     async def _fetch_history(self, channel: str, oldest: Optional[str]) -> list[dict]:
         out: list[dict] = []
@@ -175,6 +183,8 @@ class SourceReader:
                     continue
                 event = normalize.rtm_event_to_event(evt)
                 if event is None or event.channel not in allowed:
+                    continue
+                if await self._is_echo(event.channel, event.ts):
                     continue
                 await self._queue.put(event)
                 if event.ts:

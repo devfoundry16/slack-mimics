@@ -31,6 +31,9 @@ class Secrets:
     hs_xoxc_token: str
     hs_d_cookie: str
     target_bot_token: str
+    # App-level token (xapp-…) for Socket Mode. Only needed for the reverse
+    # relay feature; empty otherwise.
+    target_app_token: str = ""
 
 
 @dataclass(frozen=True)
@@ -44,12 +47,30 @@ class Config:
     # On a channel's first run, seed the cursor this many days in the past so
     # recent history is mirrored. 0 = start from now (no backfill).
     backfill_days: float = 0.0
+    # Reverse relay (vanta-core -> HS with approval). Off by default.
+    reverse_enabled: bool = False
+    # Owner's member id in the target workspace; only their messages are
+    # eligible for reverse relay.
+    owner_member_id: str = ""
 
     def target_for(self, source_channel: str) -> Optional[str]:
         for cm in self.channels:
             if cm.source == source_channel:
                 return cm.target
         return None
+
+    def source_for(self, target_channel: str) -> Optional[str]:
+        """Inverse of target_for: given a target channel, find its source."""
+        for cm in self.channels:
+            if cm.target == target_channel:
+                return cm.source
+        return None
+
+    def label_for_target(self, target_channel: str) -> str:
+        for cm in self.channels:
+            if cm.target == target_channel:
+                return cm.label or cm.source
+        return target_channel
 
     @property
     def source_channels(self) -> list[str]:
@@ -71,6 +92,7 @@ def load_secrets(env_file: Optional[str] = None) -> Secrets:
         hs_xoxc_token=require("HS_XOXC_TOKEN"),
         hs_d_cookie=require("HS_D_COOKIE"),
         target_bot_token=require("TARGET_BOT_TOKEN"),
+        target_app_token=os.environ.get("TARGET_APP_TOKEN", "").strip(),
     )
 
 
@@ -109,4 +131,6 @@ def load_config(config_path: str, env_file: Optional[str] = None) -> Config:
         poll_interval_seconds=float(data.get("poll_interval_seconds", 5.0)),
         use_websocket=bool(data.get("use_websocket", True)),
         backfill_days=float(data.get("backfill_days", 0.0)),
+        reverse_enabled=bool(data.get("reverse_enabled", False)),
+        owner_member_id=str(data.get("owner_member_id", "")),
     )

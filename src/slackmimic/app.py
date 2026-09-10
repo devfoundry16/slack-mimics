@@ -94,9 +94,16 @@ async def run(config: Config, backfill_days: Optional[float] = None) -> None:
         log.info("mirroring %d channel(s)", len(config.channels))
         consumer = asyncio.create_task(_consume(queue, transformer, poster, stop))
         source = asyncio.create_task(_run_source(reader, config, stop, backfill_days))
+        tasks = {consumer, source}
+
+        if config.reverse_enabled:
+            from .reverse.relay import run_relay
+
+            log.info("reverse relay enabled (approval-gated vanta-core → HS)")
+            tasks.add(asyncio.create_task(run_relay(config, store, hs)))
 
         done, pending = await asyncio.wait(
-            {consumer, source}, return_when=asyncio.FIRST_EXCEPTION
+            tasks, return_when=asyncio.FIRST_EXCEPTION
         )
         stop.set()
         for task in pending:

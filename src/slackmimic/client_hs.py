@@ -174,6 +174,20 @@ class HeartStampClient:
             raise SlackApiError("rtm.connect", "no_url_in_response")
         return url
 
+    async def chat_post_message(
+        self, channel: str, text: str, *, thread_ts: Optional[str] = None
+    ) -> str:
+        """Post a message into an HS channel or DM *as the session user*.
+
+        Used by the reverse relay to send an approved message to HeartStamp. The
+        `xoxc` token posts as the authenticated user (John), not as a bot.
+        Returns the new message ts.
+        """
+        body = await self._call(
+            "chat.postMessage", channel=channel, text=text, thread_ts=thread_ts
+        )
+        return str(body["ts"])
+
     async def download_file(self, url_private: str) -> bytes:
         """Download a private file using the session credentials."""
         resp = await self._client.get(url_private)

@@ -35,6 +35,24 @@ CREATE TABLE IF NOT EXISTS users (
     name     TEXT NOT NULL,
     icon_url TEXT NOT NULL DEFAULT ''
 );
+
+CREATE TABLE IF NOT EXISTS pending_outbound (
+    id             TEXT PRIMARY KEY,
+    target_channel TEXT NOT NULL,
+    target_ts      TEXT NOT NULL,
+    source_channel TEXT NOT NULL,
+    text           TEXT NOT NULL,
+    status         TEXT NOT NULL DEFAULT 'pending',
+    card_channel   TEXT NOT NULL DEFAULT '',
+    card_ts        TEXT NOT NULL DEFAULT '',
+    created_at     REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS reverse_posts (
+    source_channel TEXT NOT NULL,
+    source_ts      TEXT NOT NULL,
+    PRIMARY KEY (source_channel, source_ts)
+);
 """
 
 
@@ -43,6 +61,19 @@ class CachedUser:
     user_id: str
     name: str
     icon_url: str
+
+
+@dataclass(frozen=True)
+class PendingOutbound:
+    id: str
+    target_channel: str
+    target_ts: str
+    source_channel: str
+    text: str
+    status: str
+    card_channel: str
+    card_ts: str
+    created_at: float
 
 
 class StateStore:
@@ -165,3 +196,81 @@ class StateStore:
             (user.user_id, user.name, user.icon_url),
         )
         await self._conn.commit()
+
+    # --- reverse relay: pending outbound -----------------------------------
+
+    async def create_pending(self, pending: PendingOutbound) -> None:
+        await self._conn.execute(
+            """
+            INSERT OR REPLACE INTO pending_outbound
+                (id, target_channel, target_ts, source_channel, text,
+                 status, card_channel, card_ts, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                pending.id,
+                pending.target_channel,
+                pending.target_ts,
+                pending.source_channel,
+                pending.text,
+                pending.status,
+                pending.card_channel,
+                pending.card_ts,
+                pending.created_at,
+            ),
+        )
+        await self._conn.commit()
+
+    async def get_pending(self, pending_id: str) -> Optional[PendingOutbound]:
+        cur = await self._conn.execute(
+            "SELECT * FROM pending_outbound WHERE id = ?", (pending_id,)
+        )
+        row = await cur.fetchone()
+        if not row:
+            return None
+        return PendingOutbound(
+            id=row["id"],
+            target_channel=row["target_channel"],
+            target_ts=row["target_ts"],
+            source_channel=row["source_channel"],
+            text=row["text"],
+            status=row["status"],
+            card_channel=row["card_channel"],
+            card_ts=row["card_ts"],
+            created_at=row["created_at"],
+        )
+
+    async def set_pending_card(
+        self, pending_id: str, card_channel: str, card_ts: str
+    ) -> None:
+        await self._conn.execute(
+            "UPDATE pending_outbound SET card_channel = ?, card_ts = ? WHERE id = ?",
+            (card_channel, card_ts, pending_id),
+        )
+        await self._conn.commit()
+
+    async def set_pending_status(self, pending_id: str, status: str) -> None:
+        await self._conn.execute(
+            "UPDATE pending_outbound SET status = ? WHERE id = ?",
+            (status, pending_id),
+        )
+        await self._conn.commit()
+
+    # --- reverse relay: anti-echo ------------------------------------------
+
+    async def record_reverse_post(self, source_channel: str, source_ts: str) -> None:
+        await self._conn.execute(
+            """
+            INSERT OR IGNORE INTO reverse_posts (source_channel, source_ts)
+            VALUES (?, ?)
+            """,
+            (source_channel, source_ts),
+        )
+        await self._conn.commit()
+
+    async def is_reverse_post(self, source_channel: str, source_ts: str) -> bool:
+        cur = await self._conn.execute(
+            "SELECT 1 FROM reverse_posts WHERE source_channel = ? AND source_ts = ?",
+            (source_channel, source_ts),
+        )
+        return await cur.fetchone() is not None

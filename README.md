@@ -107,6 +107,32 @@ uv run slack-mimic
 uv run pytest
 ```
 
+## Reverse relay (reply back to HeartStamp, with approval)
+
+Optionally, you can reply *into* HeartStamp from your own workspace, gated by a
+per-message approval. When you (the owner) write a message in a mapped channel/DM,
+the bot DMs you a card with a **Review & send** button; clicking it opens a modal
+with your message in an **editable box** — **Send** posts it to the matching
+HeartStamp channel/DM *as you* (via your `xoxc` token), **Cancel/Discard** drops it.
+
+Anti-echo is built in: messages you approve into HS are not mirrored back into
+your workspace, and the bot's own mirrored posts are never treated as your input.
+
+### Enable it
+1. On your existing target Slack app: turn on **Socket Mode**, create an
+   **app-level token** (`xapp-…`, scope `connections:write`), enable **Event
+   Subscriptions** (`message.channels`, `message.groups`, `message.im`,
+   `message.mpim`) and **Interactivity**.
+2. Add bot scopes (then **Reinstall**): `channels:history`, `groups:history`,
+   `im:history`, `mpim:history`, `im:write`.
+3. Set in `.env`: `TARGET_APP_TOKEN=xapp-…`
+4. Set in `config.yaml`:
+   ```yaml
+   reverse_enabled: true
+   owner_member_id: U0XXXXXXX   # your member id in the TARGET workspace
+   ```
+5. Restart `slack-mimic`. Only *your* messages in mapped channels are eligible.
+
 ## Limitations
 
 - **Deletes** are reliably detected only over the websocket; under pure polling

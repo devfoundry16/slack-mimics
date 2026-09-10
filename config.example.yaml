@@ -18,6 +18,12 @@ use_websocket: true
 # 0 = start from now (only new messages). Restarts never re-backfill.
 backfill_days: 0
 
+# Reverse relay: let the owner send approved replies back into HeartStamp from
+# vanta-core (requires Socket Mode + TARGET_APP_TOKEN + read/im:write scopes).
+reverse_enabled: false
+# Owner's member id in the TARGET workspace; only their messages are relayed.
+owner_member_id: ""
+
 channels:
   - source: C0123ABCD   # HS #general
     target: C0456WXYZ   # your #hs-general
