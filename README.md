@@ -359,10 +359,24 @@ when you log out and starts on boot. It restarts automatically if it crashes, bu
 - Status: `systemctl --user status slack-mimic`
 - Watch its log: `journalctl --user -u slack-mimic -f`
 - Restart (e.g. after editing `.env` or `config.yaml`): `systemctl --user restart slack-mimic`
-- Stop: `systemctl --user stop slack-mimic` (add `disable` to stop starting on boot)
-- Remove: `scripts/install_service.sh --uninstall`
 
 If you move the project folder, run the install script again.
+
+#### Stopping the service
+
+| To… | Run |
+|---|---|
+| Stop it for now (starts again on next boot) | `systemctl --user stop slack-mimic` |
+| Stop it **and** don't start on boot | `systemctl --user disable --now slack-mimic` |
+| Remove the service completely | `scripts/install_service.sh --uninstall` |
+| Start it again after stopping/disabling | `systemctl --user enable --now slack-mimic` |
+
+Confirm it stopped with `systemctl --user status slack-mimic` — it should say
+`inactive (dead)`.
+
+> Run these as the **same user** that installed the service, logged in directly
+> (e.g. over SSH). From a `sudo -i` or `su` shell you'll get
+> `Failed to connect to bus` — exit back to your own user.
 
 ### macOS (launchd)
 
@@ -393,6 +407,9 @@ you move it.)
   automatically. Provisioning many channels can take a few minutes.
 - **Duplicates after enabling reverse relay** → shouldn't happen (built-in
   anti-echo); if it does, stop and re-run so cursors resync.
+- **`Failed to connect to bus` from `systemctl --user`** → you're in a `sudo`/`su`
+  shell; run it as the user who installed the service (see
+  [Stopping the service](#stopping-the-service)).
 - **Gets killed / high memory** → run without `-v`, and prefer the systemd/launchd service
   or a machine with more free memory.
 
