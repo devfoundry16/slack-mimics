@@ -340,8 +340,33 @@ posts it to HeartStamp **as you** (or **Cancel** to discard).
 ## 16. Always-on
 
 `uv run slack-mimic` runs only while that Terminal window is open. To keep it
-running after you close the window (and restart on login), install the included
-macOS service:
+running after you close the window, install it as a service.
+
+### Linux (Ubuntu, systemd)
+
+From the project folder, after steps 3–14 work:
+
+```bash
+chmod +x scripts/install_service.sh
+scripts/install_service.sh
+```
+
+This writes `~/.config/systemd/user/slack-mimic.service` pointing at this folder,
+starts it, and enables *linger* (asks for your password once) so it keeps running
+when you log out and starts on boot. It restarts automatically if it crashes, but
+**not** on an authentication failure — fix `.env`, then restart it.
+
+- Status: `systemctl --user status slack-mimic`
+- Watch its log: `journalctl --user -u slack-mimic -f`
+- Restart (e.g. after editing `.env` or `config.yaml`): `systemctl --user restart slack-mimic`
+- Stop: `systemctl --user stop slack-mimic` (add `disable` to stop starting on boot)
+- Remove: `scripts/install_service.sh --uninstall`
+
+If you move the project folder, run the install script again.
+
+### macOS (launchd)
+
+Install the included service (starts on login):
 
 ```bash
 cp com.slackmimic.mirror.plist ~/Library/LaunchAgents/
@@ -368,7 +393,7 @@ you move it.)
   automatically. Provisioning many channels can take a few minutes.
 - **Duplicates after enabling reverse relay** → shouldn't happen (built-in
   anti-echo); if it does, stop and re-run so cursors resync.
-- **Gets killed / high memory** → run without `-v`, and prefer the launchd service
+- **Gets killed / high memory** → run without `-v`, and prefer the systemd/launchd service
   or a machine with more free memory.
 
 ---
@@ -389,6 +414,7 @@ you move it.)
 | `scripts/set_cursor_now.py D… [D… …]` | Skip backfill for specific channels. |
 | `scripts/send_test.py --channel C… --text "…"` | Post one test message as the bot. |
 | `slack-mimic [--backfill DAYS] [-v]` | Run the mirror (and reverse relay if enabled). |
+| `scripts/install_service.sh [--uninstall]` | Install/remove the systemd user service (Linux). |
 
 All commands are prefixed with `uv run` and most take `--env .env`. Add `--help`
 to any script to see its options.
