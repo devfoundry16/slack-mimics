@@ -366,8 +366,8 @@ If you move the project folder, run the install script again.
 
 | To… | Run |
 |---|---|
-| Stop it for now (starts again on next boot) | `systemctl --user stop slack-mimic` |
-| Stop it **and** don't start on boot | `systemctl --user disable --now slack-mimic` |
+| Stop it for now (starts again on next boot) | `scripts/stop_service.sh` |
+| Stop it **and** don't start on boot | `scripts/stop_service.sh --disable` |
 | Remove the service completely | `scripts/install_service.sh --uninstall` |
 | Start it again after stopping/disabling | `systemctl --user enable --now slack-mimic` |
 
@@ -432,6 +432,7 @@ you move it.)
 | `scripts/send_test.py --channel C… --text "…"` | Post one test message as the bot. |
 | `slack-mimic [--backfill DAYS] [-v]` | Run the mirror (and reverse relay if enabled). |
 | `scripts/install_service.sh [--uninstall]` | Install/remove the systemd user service (Linux). |
+| `scripts/stop_service.sh [--disable]` | Stop the service (and optionally don't start on boot). |
 
 All commands are prefixed with `uv run` and most take `--env .env`. Add `--help`
 to any script to see its options.
