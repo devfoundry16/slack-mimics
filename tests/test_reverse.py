@@ -29,23 +29,27 @@ def _msg(**kw):
 
 
 def test_eligible_owner_plain_message():
-    assert is_eligible(_msg(), OWNER) is True
+    assert is_eligible(_msg()) is True
+
+
+def test_eligible_any_human_member():
+    """Other members' messages are candidates too; the owner still approves them."""
+    assert is_eligible(_msg(user="U_OTHER")) is True
 
 
 def test_reject_bot_and_app_messages():
-    assert is_eligible(_msg(bot_id="B1"), OWNER) is False
-    assert is_eligible(_msg(app_id="A1"), OWNER) is False
+    assert is_eligible(_msg(bot_id="B1")) is False
+    assert is_eligible(_msg(app_id="A1")) is False
 
 
 def test_reject_subtypes():
-    assert is_eligible(_msg(subtype="message_changed"), OWNER) is False
-    assert is_eligible(_msg(subtype="channel_join"), OWNER) is False
+    assert is_eligible(_msg(subtype="message_changed")) is False
+    assert is_eligible(_msg(subtype="channel_join")) is False
 
 
-def test_reject_other_user_and_empty():
-    assert is_eligible(_msg(user="U_OTHER"), OWNER) is False
-    assert is_eligible(_msg(text="   "), OWNER) is False
-    assert is_eligible(_msg(), "") is False  # no owner configured
+def test_reject_empty_and_authorless():
+    assert is_eligible(_msg(text="   ")) is False
+    assert is_eligible({"text": "hi", "channel": "C_DST", "ts": "1.1"}) is False
 
 
 # --- config inversion ------------------------------------------------------
@@ -71,6 +75,17 @@ def test_pending_card_has_review_and_discard():
     actions = [b for b in blocks if b["type"] == "actions"][0]
     ids = {e["action_id"]: e["value"] for e in actions["elements"]}
     assert ids == {cards.ACTION_REVIEW: "p1", cards.ACTION_DISCARD: "p1"}
+
+
+def test_pending_card_names_the_author():
+    """The owner approves other members' messages, so the card must say who wrote it."""
+    blocks = cards.pending_card_blocks(_pending(), "general", author_id="U_OTHER")
+    assert any("<@U_OTHER>" in str(b) for b in blocks)
+
+
+def test_pending_card_without_author_has_no_context_line():
+    blocks = cards.pending_card_blocks(_pending(), "general")
+    assert not any(b["type"] == "context" for b in blocks)
 
 
 def test_review_modal_prefilled_and_ids():

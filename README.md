@@ -312,10 +312,12 @@ uv run python scripts/send_test.py --channel C0XXXXXXX --text "hello" --username
 
 ## 15. Reverse relay (optional)
 
-Reply *into* HeartStamp from your own workspace, with an approval step. When you
-write in a mirrored channel, the bot DMs you a card with a **Review & send**
-button; clicking it opens a box where you can **edit** the message, then **Send**
-posts it to HeartStamp **as you** (or **Cancel** to discard).
+Reply *into* HeartStamp from your own workspace, with an approval step. When
+**anyone** writes in a mirrored channel, the bot DMs *you* (the owner) a card
+naming the author, with a **Review & send** button; clicking it opens a box where
+you can **edit** the message, then **Send** posts it to HeartStamp **as you** (or
+**Cancel** to discard). Because every relayed message goes out under your
+identity, the approval card always comes to you — never to the author.
 
 **Turn it on:**
 1. On your Slack app (from step 4): **Settings → Socket Mode → Enable**, create an
@@ -332,8 +334,10 @@ posts it to HeartStamp **as you** (or **Cancel** to discard).
    reverse_enabled: true
    owner_member_id: U0XXXXXXX   # your member ID (from step 12)
    ```
-8. Restart with `uv run slack-mimic`. Only *your* messages are eligible, and
-   nothing reaches HeartStamp without your click.
+8. Restart with `uv run slack-mimic`. Every human member's messages in mapped
+   channels are eligible (bots and the mirror's own posts are ignored), and
+   nothing reaches HeartStamp without your click. `owner_member_id` is who
+   receives the approval cards.
 
 ---
 

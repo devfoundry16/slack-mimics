@@ -22,9 +22,26 @@ def _preview(text: str, limit: int = 300) -> str:
     return text if len(text) <= limit else text[:limit] + "…"
 
 
-def pending_card_blocks(pending: PendingOutbound, hs_label: str) -> list[dict]:
-    """Card shown to the owner for a message awaiting approval."""
-    return [
+def pending_card_blocks(
+    pending: PendingOutbound, hs_label: str, author_id: str = ""
+) -> list[dict]:
+    """Card shown to the owner for a message awaiting approval.
+
+    ``author_id`` names the vanta-core member who wrote it — the owner approves
+    everyone's messages, so the card has to say whose words these are. Omitted
+    when unknown; the relayed text itself is never altered.
+    """
+    author: list[dict] = (
+        [
+            {
+                "type": "context",
+                "elements": [{"type": "mrkdwn", "text": f"From <@{author_id}>"}],
+            }
+        ]
+        if author_id
+        else []
+    )
+    return author + [
         {
             "type": "section",
             "text": {

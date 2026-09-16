@@ -21,7 +21,8 @@ backfill_days: 0
 # Reverse relay: let the owner send approved replies back into HeartStamp from
 # vanta-core (requires Socket Mode + TARGET_APP_TOKEN + read/im:write scopes).
 reverse_enabled: false
-# Owner's member id in the TARGET workspace; only their messages are relayed.
+# Owner's member id in the TARGET workspace; they approve every relayed
+# message (all human members' messages are eligible).
 owner_member_id: ""
 
 channels:

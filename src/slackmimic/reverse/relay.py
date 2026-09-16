@@ -1,7 +1,8 @@
 """Socket Mode app for the reverse relay (vanta-core → HeartStamp, with approval).
 
-One Socket Mode connection carries both detection (owner's `message` events →
-pending card) and interaction (Review button → editable modal → send/discard).
+One Socket Mode connection carries both detection (any member's `message`
+events → a pending card in the owner's DM) and interaction (Review button →
+editable modal → send/discard).
 `slack_bolt` is imported lazily so the rest of the package doesn't depend on it.
 """
 
@@ -42,7 +43,7 @@ def build_relay_app(config: Config, store: StateStore, hs_client: HeartStampClie
 
     @app.event("message")
     async def on_message(event: dict[str, Any], client, logger) -> None:
-        if not is_eligible(event, config.owner_member_id):
+        if not is_eligible(event):
             return
         source = config.source_for(event["channel"])
         if not source:
@@ -64,7 +65,9 @@ def build_relay_app(config: Config, store: StateStore, hs_client: HeartStampClie
         card_channel = dm["channel"]["id"]
         res = await client.chat_postMessage(
             channel=card_channel,
-            blocks=cards.pending_card_blocks(pending, label),
+            blocks=cards.pending_card_blocks(
+                pending, label, author_id=str(event.get("user", ""))
+            ),
             text=f"Message pending approval for #{label}",
         )
         await store.set_pending_card(pending.id, card_channel, str(res["ts"]))

@@ -49,8 +49,8 @@ class Config:
     backfill_days: float = 0.0
     # Reverse relay (vanta-core -> HS with approval). Off by default.
     reverse_enabled: bool = False
-    # Owner's member id in the target workspace; only their messages are
-    # eligible for reverse relay.
+    # Owner's member id in the target workspace; they receive the approval
+    # card for every relay candidate (any human member's message).
     owner_member_id: str = ""
 
     def target_for(self, source_channel: str) -> Optional[str]:
