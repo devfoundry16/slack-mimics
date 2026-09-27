@@ -108,11 +108,17 @@ class SourceReader:
                     emitted += 1
                 newest = max(newest, ts, key=float)
 
-            # Follow threads with replies newer than our cursor, whether the
-            # parent is new or (on a rescan) older than the cursor.
+            # Follow threads with replies we haven't read yet, whether the
+            # parent is new or (on a rescan) older than the cursor. Compare
+            # against the thread's own cursor, not the channel's: plain polls
+            # move the channel cursor past replies they can't see.
             latest_reply = msg.get("latest_reply")
-            if latest_reply and (last_ts is None or float(latest_reply) > float(last_ts)):
-                emitted += await self._poll_thread(channel, str(msg["ts"]), last_ts)
+            if latest_reply:
+                parent_ts = str(msg["ts"])
+                seen = await self._store.get_thread_cursor(channel, parent_ts)
+                if seen is None or float(latest_reply) > float(seen):
+                    emitted += await self._poll_thread(channel, parent_ts, seen)
+                    await self._store.set_thread_cursor(channel, parent_ts, str(latest_reply))
                 newest = max(newest, str(latest_reply), key=float)
 
         await self._store.set_last_ts(channel, newest)

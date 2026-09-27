@@ -63,6 +63,7 @@ class ThreadHS:
         self._history = history
         self._replies = replies or {}
         self.parent_fetches = []
+        self.thread_fetches = []
 
     async def conversations_history(self, channel, *, oldest=None, limit=100, cursor=None):
         return {"messages": [m for m in self._history if _after(m["ts"], oldest)]}
@@ -72,6 +73,7 @@ class ThreadHS:
         if limit == 1:
             self.parent_fetches.append(ts)
             return {"messages": [parent]}
+        self.thread_fetches.append(ts)
         replies = [m for m in self._replies.get(ts, []) if _after(m["ts"], oldest)]
         return {"messages": [parent] + replies}
 
@@ -169,3 +171,39 @@ async def test_rescan_respects_lookback(store):
     reader = SourceReader(hs, make_config(thread_lookback_days=2), store, q)
     await reader.poll_once(rescan_threads=True)
     assert q.empty()
+
+
+async def test_reply_not_lost_when_channel_cursor_moves_past_it(store):
+    """A plain poll can't see a reply to an existing thread, but it does move the
+    channel cursor past it when a newer top-level message arrives. The rescan
+    must still find the reply."""
+    parent_ts, reply_ts, newer_ts = _ago(600), _ago(300), _ago(100)
+    parent = {"ts": parent_ts, "user": "U1", "text": "parent", "thread_ts": parent_ts,
+              "reply_count": 1, "latest_reply": reply_ts}
+    reply = {"ts": reply_ts, "user": "U2", "text": "reply", "thread_ts": parent_ts}
+    newer = {"ts": newer_ts, "user": "U3", "text": "new top-level"}
+    hs = ThreadHS([parent, newer], {parent_ts: [reply]})
+    q: asyncio.Queue = asyncio.Queue()
+    # State after the parent and the newer message were mirrored by plain polls.
+    await store.record_mapping("C_SRC", parent_ts, "C_DST", "900.1")
+    await store.record_mapping("C_SRC", newer_ts, "C_DST", "900.2")
+    await store.set_last_ts("C_SRC", newer_ts)
+
+    await SourceReader(hs, make_config(), store, q).poll_once(rescan_threads=True)
+
+    assert [e.ts for e in _drain(q)] == [reply_ts]
+
+
+async def test_synced_thread_is_not_refetched(store):
+    hs, parent_ts, reply_ts, cursor = _old_thread()
+    q: asyncio.Queue = asyncio.Queue()
+    await store.set_last_ts("C_SRC", cursor)
+    await store.record_mapping("C_SRC", parent_ts, "C_DST", "900.1")
+    reader = SourceReader(hs, make_config(), store, q)
+
+    await reader.poll_once(rescan_threads=True)
+    assert [e.ts for e in _drain(q)] == [reply_ts]
+    # Nothing new in the thread: the next rescan doesn't fetch it again.
+    await reader.poll_once(rescan_threads=True)
+    assert q.empty()
+    assert hs.thread_fetches == [parent_ts]

@@ -4,6 +4,8 @@ All three tables are what make the daemon resumable and idempotent:
 
 * ``channels`` — last-seen source ``ts`` per channel, so a restart resumes
   without re-mirroring or gaps.
+* ``threads`` — newest reply seen per source thread. Separate from the
+  channel cursor, which top-level polling moves past replies it can't see.
 * ``message_map`` — maps a source ``(channel, ts)`` to the target ``(channel,
   ts)`` it was posted as. Powers threading, edits, and deletes.
 * ``users`` — cached id -> display name / avatar to avoid re-fetching.
@@ -20,6 +22,13 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS channels (
     source_channel TEXT PRIMARY KEY,
     last_ts        TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS threads (
+    source_channel TEXT NOT NULL,
+    thread_ts      TEXT NOT NULL,
+    last_reply_ts  TEXT NOT NULL,
+    PRIMARY KEY (source_channel, thread_ts)
 );
 
 CREATE TABLE IF NOT EXISTS message_map (
@@ -144,6 +153,30 @@ class StateStore:
             ON CONFLICT(source_channel) DO UPDATE SET last_ts = excluded.last_ts
             """,
             (source_channel, ts),
+        )
+        await self._conn.commit()
+
+    # --- thread cursors ----------------------------------------------------
+
+    async def get_thread_cursor(self, source_channel: str, thread_ts: str) -> Optional[str]:
+        """Newest reply ``ts`` already read from a source thread, if any."""
+        cur = await self._conn.execute(
+            "SELECT last_reply_ts FROM threads WHERE source_channel = ? AND thread_ts = ?",
+            (source_channel, thread_ts),
+        )
+        row = await cur.fetchone()
+        return row["last_reply_ts"] if row else None
+
+    async def set_thread_cursor(
+        self, source_channel: str, thread_ts: str, last_reply_ts: str
+    ) -> None:
+        await self._conn.execute(
+            """
+            INSERT INTO threads (source_channel, thread_ts, last_reply_ts) VALUES (?, ?, ?)
+            ON CONFLICT(source_channel, thread_ts) DO UPDATE SET
+                last_reply_ts = excluded.last_reply_ts
+            """,
+            (source_channel, thread_ts, last_reply_ts),
         )
         await self._conn.commit()
 
