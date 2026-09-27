@@ -51,6 +51,7 @@ class HeartStampClient:
         self._token = xoxc_token
         # The cookie value is stored raw; httpx handles header encoding.
         cookie_value = d_cookie if d_cookie.startswith("d=") else f"d={d_cookie}"
+        self._cookie = cookie_value
         self._owns_client = client is None
         self._client = client or httpx.AsyncClient(
             base_url=base_url,
@@ -60,6 +61,16 @@ class HeartStampClient:
             },
             timeout=30.0,
         )
+
+    @property
+    def ws_headers(self) -> dict[str, str]:
+        """Headers for the RTM websocket handshake.
+
+        Session (xoxc) tokens need the ``d`` cookie on every request, including
+        the websocket; without it Slack sends an ``error`` event and drops the
+        socket within seconds.
+        """
+        return {"Cookie": self._cookie}
 
     async def close(self) -> None:
         if self._owns_client:

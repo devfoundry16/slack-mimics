@@ -34,6 +34,10 @@ log = logging.getLogger(__name__)
 # How many recently queued top-level messages to remember (see _queued_roots).
 _QUEUED_ROOTS_MAX = 5000
 
+# A websocket that drops sooner than this counts as failing (caller falls back
+# to polling); a later drop is routine and the caller reconnects right away.
+_MIN_HEALTHY_SECONDS = 60.0
+
 
 class SourceReader:
     def __init__(
@@ -248,28 +252,45 @@ class SourceReader:
         """Stream realtime events until the socket drops or ``stop`` is set.
 
         Import of ``websockets`` is local so the polling path has no hard
-        dependency on it. Raises :class:`AuthError` (propagated) for bad creds;
-        returns on any other socket failure so the caller can fall back.
+        dependency on it. Raises :class:`AuthError` (propagated) for bad creds.
+        Returns when a healthy session drops, so the caller catches up and
+        reconnects; raises when the socket fails soon after connecting, so the
+        caller falls back to polling instead of reconnecting in a tight loop.
         """
         import websockets
 
         allowed = set(self._config.source_channels)
         url = await self._client.rtm_connect()
-        log.info("realtime: connected via websocket")
+        started = time.monotonic()
 
-        async with websockets.connect(url) as ws:
-            while stop is None or not stop.is_set():
-                raw = await ws.recv()
-                try:
-                    evt = json.loads(raw)
-                except (ValueError, TypeError):
-                    continue
-                event = normalize.rtm_event_to_event(evt)
-                if event is None or event.channel not in allowed:
-                    continue
-                if not await self._emit(event):
-                    continue
-                if event.ts:
-                    prev = await self._store.get_last_ts(event.channel)
-                    if prev is None or float(event.ts) > float(prev):
-                        await self._store.set_last_ts(event.channel, event.ts)
+        try:
+            async with websockets.connect(
+                url, additional_headers=self._client.ws_headers
+            ) as ws:
+                log.info("realtime: connected via websocket")
+                await self._stream(ws, allowed, stop)
+        except websockets.ConnectionClosed as exc:
+            if time.monotonic() - started < _MIN_HEALTHY_SECONDS:
+                raise
+            log.info("realtime: connection dropped (%s); reconnecting", exc)
+
+    async def _stream(self, ws, allowed: set[str], stop: Optional[asyncio.Event]) -> None:
+        while stop is None or not stop.is_set():
+            raw = await ws.recv()
+            try:
+                evt = json.loads(raw)
+            except (ValueError, TypeError):
+                continue
+            if evt.get("type") == "error":
+                # e.g. a rejected session; Slack drops the socket right after.
+                log.warning("realtime: server error %s", evt.get("error"))
+                continue
+            event = normalize.rtm_event_to_event(evt)
+            if event is None or event.channel not in allowed:
+                continue
+            if not await self._emit(event):
+                continue
+            if event.ts:
+                prev = await self._store.get_last_ts(event.channel)
+                if prev is None or float(event.ts) > float(prev):
+                    await self._store.set_last_ts(event.channel, event.ts)

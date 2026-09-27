@@ -207,3 +207,66 @@ async def test_synced_thread_is_not_refetched(store):
     await reader.poll_once(rescan_threads=True)
     assert q.empty()
     assert hs.thread_fetches == [parent_ts]
+
+
+# --- websocket ---------------------------------------------------------------
+
+class WsHS:
+    """Fake HS client pointing the reader at a local websocket server."""
+
+    def __init__(self, url):
+        self._url = url
+        self.ws_headers = {"Cookie": "d=secret"}
+
+    async def rtm_connect(self):
+        return self._url
+
+
+async def _serve(handler):
+    from websockets.asyncio.server import serve
+
+    server = await serve(handler, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    return server, f"ws://127.0.0.1:{port}"
+
+
+async def test_websocket_sends_session_cookie(store):
+    """Without the d cookie Slack sends an error event and drops the socket."""
+    import websockets
+
+    seen = {}
+
+    async def handler(ws):
+        seen["cookie"] = ws.request.headers.get("Cookie")
+        await ws.send('{"type": "hello"}')
+        await ws.send('{"type": "message", "channel": "C_SRC", "ts": "5.5", "user": "U1", "text": "hi"}')
+        await ws.close()
+
+    server, url = await _serve(handler)
+    q: asyncio.Queue = asyncio.Queue()
+    try:
+        # A socket that closes right after connecting is a failure: let the
+        # caller fall back to polling rather than reconnecting in a tight loop.
+        with pytest.raises(websockets.ConnectionClosed):
+            await SourceReader(WsHS(url), make_config(), store, q).run_websocket()
+    finally:
+        server.close()
+    assert seen["cookie"] == "d=secret"
+    assert [e.ts for e in _drain(q)] == ["5.5"]
+
+
+async def test_websocket_drop_after_healthy_session_returns(store, monkeypatch):
+    """A drop after a healthy session returns, so the caller catches up and reconnects."""
+    from slackmimic.source import reader as reader_mod
+
+    monkeypatch.setattr(reader_mod, "_MIN_HEALTHY_SECONDS", 0)
+
+    async def handler(ws):
+        await ws.send('{"type": "hello"}')
+        await ws.close()
+
+    server, url = await _serve(handler)
+    try:
+        await SourceReader(WsHS(url), make_config(), store, asyncio.Queue()).run_websocket()
+    finally:
+        server.close()
