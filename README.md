@@ -233,6 +233,20 @@ uv run python scripts/provision_dms.py --env .env --exclude keith --exclude bob
 > DMs are your most private conversations. Mirroring them copies their contents
 > into channels in your workspace — only do this if you're comfortable with that.
 
+**New HeartStamp members get a DM channel automatically.** List who should be
+invited in `config.yaml`:
+
+```yaml
+new_member_dm_invites: [U0XXXXXXX]   # member ids in YOUR workspace
+```
+
+When someone joins HeartStamp, the mirror opens your DM with them (nothing is
+sent), creates a private `#dm-<name>` channel, invites those members plus
+`owner_member_id`, adds it to `config.yaml`, and starts mirroring it — no
+restart. People who join while the mirror is stopped are handled on its next
+start. Its first start with this setting only records the current members.
+Bots and deactivated accounts are skipped.
+
 ---
 
 ## 11. Tidy group-DM names (optional)
@@ -464,6 +478,7 @@ thread_rescan_seconds: 300       # in polling mode, how often to run that thread
 backfill_days: 7                 # history to copy on first run (0 = none)
 reverse_enabled: false           # reply-back with approval (step 15)
 owner_member_id: ""              # your member ID (for reverse relay)
+new_member_dm_invites: []        # invite these to a new dm- channel per new HeartStamp member (step 10)
 channels:                        # written by the provision scripts
   - source: C0123ABCD            # HeartStamp channel/DM id
     target: C0XXXXXXX            # your workspace channel id

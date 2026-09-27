@@ -10,6 +10,7 @@ from typing import Optional
 from .client_hs import AuthError, HeartStampClient
 from .config import Config, load_config
 from .models import SourceEvent
+from .newmembers import NewMemberProvisioner
 from .sink.client_target import TargetClient
 from .sink.poster import Poster
 from .source.reader import SourceReader
@@ -94,7 +95,23 @@ async def _run_source(
                 log.warning("catch-up poll failed: %s", poll_exc)
 
 
-async def run(config: Config, backfill_days: Optional[float] = None) -> None:
+async def _reconcile_new_members(provisioner: NewMemberProvisioner) -> None:
+    """Startup catch-up for members who joined while the service was down."""
+    try:
+        n = await provisioner.reconcile()
+        if n:
+            log.info("new-member DMs: set up %d channel(s) for members who joined while down", n)
+    except AuthError:
+        raise
+    except Exception as exc:
+        log.warning("new-member catch-up failed: %s", exc)
+
+
+async def run(
+    config: Config,
+    backfill_days: Optional[float] = None,
+    config_path: Optional[str] = None,
+) -> None:
     if backfill_days is None:
         backfill_days = config.backfill_days
     queue: "asyncio.Queue[SourceEvent]" = asyncio.Queue()
@@ -108,12 +125,29 @@ async def run(config: Config, backfill_days: Optional[float] = None) -> None:
         resolver = UserResolver(hs, store)
         transformer = Transformer(config, resolver)
         poster = Poster(target, store, hs)
-        reader = SourceReader(hs, config, store, queue)
+        provisioner = (
+            NewMemberProvisioner(hs, target, store, config, config_path)
+            if config.new_member_dm_invites and config_path
+            else None
+        )
+        reader = SourceReader(
+            hs,
+            config,
+            store,
+            queue,
+            on_member_joined=provisioner.on_member_joined if provisioner else None,
+        )
 
         log.info("mirroring %d channel(s)", len(config.channels))
         consumer = asyncio.create_task(_consume(queue, transformer, poster, stop))
         source = asyncio.create_task(_run_source(reader, config, stop, backfill_days))
         tasks = {consumer, source}
+
+        if provisioner:
+            log.info(
+                "new-member DMs enabled (inviting %s)", ", ".join(config.new_member_dm_invites)
+            )
+            tasks.add(asyncio.create_task(_reconcile_new_members(provisioner)))
 
         if config.reverse_enabled:
             from .reverse.relay import run_relay
@@ -154,7 +188,7 @@ def main() -> None:
 
     config = load_config(args.config, env_file=args.env)
     try:
-        asyncio.run(run(config, backfill_days=args.backfill))
+        asyncio.run(run(config, backfill_days=args.backfill, config_path=args.config))
     except AuthError as exc:
         log.error("authentication failed: %s", exc)
         raise SystemExit(2)

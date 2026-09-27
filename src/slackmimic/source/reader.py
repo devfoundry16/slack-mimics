@@ -21,7 +21,7 @@ import json
 import logging
 import time
 from collections import OrderedDict
-from typing import Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from ..client_hs import AuthError, HeartStampClient
 from ..config import Config
@@ -46,11 +46,16 @@ class SourceReader:
         config: Config,
         store: StateStore,
         queue: "asyncio.Queue[SourceEvent]",
+        on_member_joined: Optional[Callable[[dict[str, Any]], Awaitable[Any]]] = None,
     ) -> None:
         self._client = client
         self._config = config
         self._store = store
         self._queue = queue
+        # Called in the background with the user object of each realtime
+        # team_join, so the event stream isn't held up.
+        self._on_member_joined = on_member_joined
+        self._background: set[asyncio.Task] = set()
         # (channel, ts) of top-level messages queued but maybe not yet posted,
         # so _ensure_parent doesn't fetch a parent that's already on its way.
         self._queued_roots: OrderedDict[tuple[str, str], None] = OrderedDict()
@@ -259,7 +264,6 @@ class SourceReader:
         """
         import websockets
 
-        allowed = set(self._config.source_channels)
         url = await self._client.rtm_connect()
         started = time.monotonic()
 
@@ -268,13 +272,13 @@ class SourceReader:
                 url, additional_headers=self._client.ws_headers
             ) as ws:
                 log.info("realtime: connected via websocket")
-                await self._stream(ws, allowed, stop)
+                await self._stream(ws, stop)
         except websockets.ConnectionClosed as exc:
             if time.monotonic() - started < _MIN_HEALTHY_SECONDS:
                 raise
             log.info("realtime: connection dropped (%s); reconnecting", exc)
 
-    async def _stream(self, ws, allowed: set[str], stop: Optional[asyncio.Event]) -> None:
+    async def _stream(self, ws, stop: Optional[asyncio.Event]) -> None:
         while stop is None or not stop.is_set():
             raw = await ws.recv()
             try:
@@ -285,8 +289,12 @@ class SourceReader:
                 # e.g. a rejected session; Slack drops the socket right after.
                 log.warning("realtime: server error %s", evt.get("error"))
                 continue
+            if evt.get("type") == "team_join":
+                self._member_joined(evt.get("user") or {})
+                continue
             event = normalize.rtm_event_to_event(evt)
-            if event is None or event.channel not in allowed:
+            # Looked up per event: channels can be added while running.
+            if event is None or self._config.target_for(event.channel) is None:
                 continue
             if not await self._emit(event):
                 continue
@@ -294,3 +302,15 @@ class SourceReader:
                 prev = await self._store.get_last_ts(event.channel)
                 if prev is None or float(event.ts) > float(prev):
                     await self._store.set_last_ts(event.channel, event.ts)
+
+    def _member_joined(self, user: dict[str, Any]) -> None:
+        if self._on_member_joined is None:
+            return
+        task = asyncio.create_task(self._on_member_joined(user))
+        self._background.add(task)
+        task.add_done_callback(self._member_joined_done)
+
+    def _member_joined_done(self, task: asyncio.Task) -> None:
+        self._background.discard(task)
+        if not task.cancelled() and task.exception() is not None:
+            log.warning("new-member handler failed: %s", task.exception())

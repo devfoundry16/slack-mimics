@@ -9,6 +9,8 @@ All three tables are what make the daemon resumable and idempotent:
 * ``message_map`` — maps a source ``(channel, ts)`` to the target ``(channel,
   ts)`` it was posted as. Powers threading, edits, and deletes.
 * ``users`` — cached id -> display name / avatar to avoid re-fetching.
+* ``known_users`` — HS members already seen, so members who joined while the
+  service was down can be found at startup.
 """
 
 from __future__ import annotations
@@ -47,6 +49,10 @@ CREATE TABLE IF NOT EXISTS users (
     user_id  TEXT PRIMARY KEY,
     name     TEXT NOT NULL,
     icon_url TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS known_users (
+    user_id TEXT PRIMARY KEY
 );
 
 CREATE TABLE IF NOT EXISTS pending_outbound (
@@ -258,6 +264,25 @@ class StateStore:
                 icon_url = excluded.icon_url
             """,
             (user.user_id, user.name, user.icon_url),
+        )
+        await self._conn.commit()
+
+    # --- known HS members --------------------------------------------------
+
+    async def has_known_users(self) -> bool:
+        cur = await self._conn.execute("SELECT 1 FROM known_users LIMIT 1")
+        return await cur.fetchone() is not None
+
+    async def is_known_user(self, user_id: str) -> bool:
+        cur = await self._conn.execute(
+            "SELECT 1 FROM known_users WHERE user_id = ?", (user_id,)
+        )
+        return await cur.fetchone() is not None
+
+    async def add_known_users(self, user_ids: list[str]) -> None:
+        await self._conn.executemany(
+            "INSERT OR IGNORE INTO known_users (user_id) VALUES (?)",
+            [(u,) for u in user_ids],
         )
         await self._conn.commit()
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -59,6 +60,17 @@ class Config:
     # Owner's member id in the target workspace; they receive the approval
     # card for every relay candidate (any human member's message).
     owner_member_id: str = ""
+    # Target-workspace member ids invited (with the owner) to the dm- channel
+    # created for each new HeartStamp member. Empty turns the feature off.
+    new_member_dm_invites: list[str] = field(default_factory=list)
+
+    def add_channel(self, channel: ChannelMap) -> None:
+        """Start mirroring a channel added while running.
+
+        ``channels`` is shared by the reader, poster and relay, which all look
+        mappings up on every use, so they pick the new one up immediately.
+        """
+        self.channels.append(channel)
 
     def target_for(self, source_channel: str) -> Optional[str]:
         for cm in self.channels:
@@ -143,4 +155,47 @@ def load_config(config_path: str, env_file: Optional[str] = None) -> Config:
         backfill_days=float(data.get("backfill_days", 0.0)),
         reverse_enabled=bool(data.get("reverse_enabled", False)),
         owner_member_id=str(data.get("owner_member_id", "")),
+        new_member_dm_invites=[str(u) for u in data.get("new_member_dm_invites") or []],
     )
+
+
+def _yaml_scalar(value: str) -> str:
+    """``value`` as a YAML scalar: plain if it round-trips, else double-quoted."""
+    try:
+        if yaml.safe_load(f"k: {value}") == {"k": value}:
+            return value
+    except yaml.YAMLError:
+        pass
+    return json.dumps(value)  # a JSON string is a valid double-quoted YAML scalar
+
+
+def append_channel_mapping(config_path: str, source: str, target: str, label: str) -> None:
+    """Append one channel mapping to config.yaml, leaving the rest as written.
+
+    The provision scripts write ``channels`` as the file's last block, so
+    appending keeps comments and every other setting. The result is re-parsed
+    and must equal the old config plus this mapping; otherwise the file is left
+    untouched and :class:`ConfigError` is raised.
+    """
+    path = Path(config_path)
+    before_text = path.read_text(encoding="utf-8")
+    before = yaml.safe_load(before_text) or {}
+    text = before_text if before_text.endswith("\n") else before_text + "\n"
+    text += (
+        f"  - source: {_yaml_scalar(source)}\n"
+        f"    target: {_yaml_scalar(target)}\n"
+        f"    label: {_yaml_scalar(label)}\n"
+    )
+    entry = {"source": source, "target": target, "label": label}
+    expected = dict(before, channels=[*(before.get("channels") or []), entry])
+    try:
+        after = yaml.safe_load(text)
+    except yaml.YAMLError:
+        after = None
+    if after != expected:
+        raise ConfigError(
+            f"can't safely add a channel to {config_path}: 'channels' must be its last block"
+        )
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)

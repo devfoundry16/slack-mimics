@@ -270,3 +270,46 @@ async def test_websocket_drop_after_healthy_session_returns(store, monkeypatch):
         await SourceReader(WsHS(url), make_config(), store, asyncio.Queue()).run_websocket()
     finally:
         server.close()
+
+
+async def test_websocket_passes_team_join_to_handler(store):
+    joined = []
+
+    async def on_member_joined(user):
+        joined.append(user["id"])
+
+    async def handler(ws):
+        await ws.send('{"type": "hello"}')
+        await ws.send('{"type": "team_join", "user": {"id": "U_NEW"}}')
+        await ws.close()
+
+    server, url = await _serve(handler)
+    reader = SourceReader(
+        WsHS(url), make_config(), store, asyncio.Queue(), on_member_joined=on_member_joined
+    )
+    try:
+        with pytest.raises(Exception):
+            await reader.run_websocket()
+        await asyncio.sleep(0)  # let the background handler run
+    finally:
+        server.close()
+    assert joined == ["U_NEW"]
+
+
+async def test_websocket_mirrors_channel_added_while_running(store):
+    """A channel added to the config mid-session is mirrored without reconnecting."""
+    cfg = make_config()
+
+    async def handler(ws):
+        cfg.add_channel(ChannelMap("D_NEW", "C_NEW", "dm-new"))
+        await ws.send('{"type": "message", "channel": "D_NEW", "ts": "7.7", "user": "U1", "text": "hi"}')
+        await ws.close()
+
+    server, url = await _serve(handler)
+    q: asyncio.Queue = asyncio.Queue()
+    try:
+        with pytest.raises(Exception):
+            await SourceReader(WsHS(url), cfg, store, q).run_websocket()
+    finally:
+        server.close()
+    assert [e.ts for e in _drain(q)] == ["7.7"]

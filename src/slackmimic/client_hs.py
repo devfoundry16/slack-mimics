@@ -156,6 +156,16 @@ class HeartStampClient:
             inclusive="false",
         )
 
+    async def users_list(
+        self, *, limit: int = 200, cursor: Optional[str] = None
+    ) -> dict[str, Any]:
+        """List workspace members (one page)."""
+        return await self._call("users.list", limit=limit, cursor=cursor)
+
+    async def conversations_open(self, users: str) -> dict[str, Any]:
+        """Open (or find) the session user's DM with ``users``; sends nothing."""
+        return await self._call("conversations.open", users=users)
+
     async def users_info(self, user: str) -> dict[str, Any]:
         """Look up a single user's profile."""
         return await self._call("users.info", user=user)

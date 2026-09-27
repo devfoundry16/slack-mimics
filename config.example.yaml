@@ -33,6 +33,12 @@ reverse_enabled: false
 # message (all human members' messages are eligible).
 owner_member_id: ""
 
+# When someone new joins HeartStamp, create a private dm-<name> channel for
+# your DM with them and invite these TARGET-workspace member ids (plus
+# owner_member_id). Empty = off. Leave `channels` as the last block: new
+# mappings are appended to the end of this file.
+new_member_dm_invites: []
+
 channels:
   - source: C0123ABCD   # HS #general
     target: C0456WXYZ   # your #hs-general

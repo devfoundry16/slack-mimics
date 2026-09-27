@@ -95,3 +95,11 @@ async def test_migrates_pending_outbound_thread_ts(tmp_path):
         )
         await s.create_pending(p)
         assert await s.get_pending("new") == p
+
+
+async def test_known_users(store):
+    assert not await store.has_known_users()
+    await store.add_known_users(["U1", "U2", "U1"])
+    assert await store.has_known_users()
+    assert await store.is_known_user("U1") and await store.is_known_user("U2")
+    assert not await store.is_known_user("U3")
