@@ -46,7 +46,15 @@ class Poster:
         mapping = await self._store.get_target_ts(
             action.source_channel, action.source_thread_ts
         )
-        return mapping[1] if mapping else None
+        if not mapping:
+            log.warning(
+                "thread parent %s@%s not mirrored; posting reply %s top-level",
+                action.source_channel,
+                action.source_thread_ts,
+                action.source_ts,
+            )
+            return None
+        return mapping[1]
 
     async def _create(self, action: TargetAction) -> None:
         # Skip if we've already mirrored this source message (idempotency).
@@ -64,7 +72,9 @@ class Poster:
         await self._store.record_mapping(
             action.source_channel, action.source_ts, action.channel, target_ts
         )
-        await self._mirror_files(action, thread_ts=thread_ts or target_ts)
+        # Files go where the message went: in the thread for a reply, in the
+        # channel for a top-level message.
+        await self._mirror_files(action, thread_ts=thread_ts)
 
     async def _edit(self, action: TargetAction) -> None:
         mapping = await self._store.get_target_ts(action.source_channel, action.source_ts)
@@ -103,7 +113,9 @@ class Poster:
         except Exception as exc:
             log.warning("reaction remove failed (%s): %s", action.reaction, exc)
 
-    async def _mirror_files(self, action: TargetAction, *, thread_ts: str) -> None:
+    async def _mirror_files(
+        self, action: TargetAction, *, thread_ts: Optional[str]
+    ) -> None:
         for f in action.files:
             try:
                 content = await self._hs.download_file(f.url_private)

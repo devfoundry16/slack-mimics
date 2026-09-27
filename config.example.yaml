@@ -13,6 +13,14 @@ poll_interval_seconds: 5
 
 # Prefer the realtime websocket; fall back to polling automatically if it fails.
 use_websocket: true
+# After the websocket fails, poll for this many seconds, then try it again.
+websocket_retry_seconds: 300
+
+# Catch-up polls (startup, reconnect) look this many days back for threads with
+# new replies, so replies to older threads aren't missed while disconnected.
+thread_lookback_days: 7
+# In polling mode, how often (seconds) to run that thread rescan.
+thread_rescan_seconds: 300
 
 # On a channel's first run, mirror this many days of history before going live.
 # 0 = start from now (only new messages). Restarts never re-backfill.

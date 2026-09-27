@@ -55,6 +55,11 @@ HeartStamp (you can't add apps)                Your own workspace
   admin there, so this is allowed). The bot can *mimic* each original author's
   name and picture.
 - A small program runs continuously, copying new messages across within seconds.
+- **Threads** stay threads. A reply goes under its mirrored parent; if the
+  parent was never copied (e.g. it's older than the backfill), the parent is
+  copied first — it appears at the bottom of the channel — and the reply goes
+  under it. Replies to older threads that arrive while the mirror is offline
+  are picked up on restart (see `thread_lookback_days`).
 
 You set it up once with a few commands. After that it just runs.
 
@@ -446,6 +451,9 @@ to any script to see its options.
 db_path: slackmimic.sqlite3      # where state (cursors, history map) is kept
 poll_interval_seconds: 5         # how often to check when websocket is unavailable
 use_websocket: true              # prefer real-time; falls back to polling
+websocket_retry_seconds: 300     # after a websocket failure, poll this long, then retry it
+thread_lookback_days: 7          # catch-up looks this far back for threads with new replies
+thread_rescan_seconds: 300       # in polling mode, how often to run that thread rescan
 backfill_days: 7                 # history to copy on first run (0 = none)
 reverse_enabled: false           # reply-back with approval (step 15)
 owner_member_id: ""              # your member ID (for reverse relay)
@@ -467,5 +475,7 @@ uv run --extra dev pytest        # run the test suite
 
 - **Deletes** are reliably mirrored only over the websocket connection; with
   polling they may be missed.
+- **Replies to threads older than `thread_lookback_days`** are only mirrored
+  while the websocket is connected; a catch-up poll doesn't look that far back.
 - **Free workspaces** keep ~90 days of history; posting is unaffected.
 - Session credentials rotate and occasionally need re-extracting (step 5).

@@ -152,3 +152,30 @@ async def test_file_failure_degrades_gracefully(store):
     # main message + a fallback note, no crash
     assert len(target.posted) == 2
     assert "not mirrored" in target.posted[1]["text"]
+
+
+async def test_top_level_file_goes_to_channel(store):
+    target = FakeTarget()
+    poster = Poster(target, store, FakeHS())
+    f = SourceFile(id="F1", name="a.png", mimetype="image/png", url_private="http://x/a")
+    await poster.apply(action(EventKind.CREATE, "1.1", files=[f]))
+    assert target.uploads[0]["thread_ts"] is None
+
+
+async def test_reply_file_goes_to_thread(store):
+    target = FakeTarget()
+    poster = Poster(target, store, FakeHS())
+    await poster.apply(action(EventKind.CREATE, "1.1"))
+    parent_ts = target.posted[0]["ts"]
+    f = SourceFile(id="F1", name="a.png", mimetype="image/png", url_private="http://x/a")
+    await poster.apply(action(EventKind.CREATE, "2.2", thread="1.1", files=[f]))
+    assert target.uploads[0]["thread_ts"] == parent_ts
+
+
+async def test_unmirrored_parent_is_logged(store, caplog):
+    target = FakeTarget()
+    poster = Poster(target, store, FakeHS())
+    with caplog.at_level("WARNING"):
+        await poster.apply(action(EventKind.CREATE, "2.2", thread="1.1"))
+    assert target.posted[0]["thread_ts"] is None
+    assert "not mirrored" in caplog.text

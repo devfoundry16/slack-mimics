@@ -44,6 +44,13 @@ class Config:
     poll_interval_seconds: float = 5.0
     # Prefer the realtime websocket; fall back to polling if it fails.
     use_websocket: bool = True
+    # After the websocket fails, poll for this long before trying it again.
+    websocket_retry_seconds: float = 300.0
+    # How far back catch-up polls look for threads with new replies. Replies to
+    # parents older than this are only picked up by the websocket.
+    thread_lookback_days: float = 7.0
+    # In polling mode, how often to run that thread rescan.
+    thread_rescan_seconds: float = 300.0
     # On a channel's first run, seed the cursor this many days in the past so
     # recent history is mirrored. 0 = start from now (no backfill).
     backfill_days: float = 0.0
@@ -130,6 +137,9 @@ def load_config(config_path: str, env_file: Optional[str] = None) -> Config:
         db_path=str(data.get("db_path", "slackmimic.sqlite3")),
         poll_interval_seconds=float(data.get("poll_interval_seconds", 5.0)),
         use_websocket=bool(data.get("use_websocket", True)),
+        websocket_retry_seconds=float(data.get("websocket_retry_seconds", 300.0)),
+        thread_lookback_days=float(data.get("thread_lookback_days", 7.0)),
+        thread_rescan_seconds=float(data.get("thread_rescan_seconds", 300.0)),
         backfill_days=float(data.get("backfill_days", 0.0)),
         reverse_enabled=bool(data.get("reverse_enabled", False)),
         owner_member_id=str(data.get("owner_member_id", "")),

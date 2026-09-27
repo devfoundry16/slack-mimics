@@ -4,7 +4,8 @@ Two transports:
 
 * :meth:`SourceReader.poll_once` / :meth:`run_polling` — robust fallback that
   fetches new messages (and thread replies) via ``conversations.history`` since
-  the stored cursor. Always works.
+  the stored cursor. Always works. A *thread rescan* widens the history window
+  to ``thread_lookback_days`` so replies to older threads are found too.
 * :meth:`run_websocket` — near-real-time via the RTM websocket, layered on top.
   On any failure it returns so the caller can fall back to polling.
 
@@ -19,15 +20,19 @@ import asyncio
 import json
 import logging
 import time
+from collections import OrderedDict
 from typing import Optional
 
 from ..client_hs import AuthError, HeartStampClient
 from ..config import Config
-from ..models import SourceEvent
+from ..models import EventKind, SourceEvent
 from ..state.store import StateStore
 from . import normalize
 
 log = logging.getLogger(__name__)
+
+# How many recently queued top-level messages to remember (see _queued_roots).
+_QUEUED_ROOTS_MAX = 5000
 
 
 class SourceReader:
@@ -42,6 +47,9 @@ class SourceReader:
         self._config = config
         self._store = store
         self._queue = queue
+        # (channel, ts) of top-level messages queued but maybe not yet posted,
+        # so _ensure_parent doesn't fetch a parent that's already on its way.
+        self._queued_roots: OrderedDict[tuple[str, str], None] = OrderedDict()
 
     # --- polling -----------------------------------------------------------
 
@@ -61,16 +69,27 @@ class SourceReader:
                 when = f"{backfill_days:g}d ago" if backfill_days > 0 else "now"
                 log.info("channel %s: starting from %s (%s)", channel, when, start_ts)
 
-    async def poll_once(self) -> int:
-        """Poll every channel once. Returns the number of events emitted."""
+    async def poll_once(self, rescan_threads: bool = False) -> int:
+        """Poll every channel once. Returns the number of events emitted.
+
+        With ``rescan_threads`` the history window reaches back
+        ``thread_lookback_days`` so new replies to older threads are found;
+        ``conversations.history`` only returns top-level messages, so a reply
+        to a parent older than the cursor is otherwise invisible to polling.
+        """
         total = 0
         for channel in self._config.source_channels:
-            total += await self._poll_channel(channel)
+            total += await self._poll_channel(channel, rescan_threads)
         return total
 
-    async def _poll_channel(self, channel: str) -> int:
+    async def _poll_channel(self, channel: str, rescan_threads: bool = False) -> int:
         last_ts = await self._store.get_last_ts(channel)
-        messages = await self._fetch_history(channel, last_ts)
+        oldest = last_ts
+        lookback_days = self._config.thread_lookback_days
+        if rescan_threads and last_ts is not None and lookback_days > 0:
+            lookback = time.time() - lookback_days * 86400
+            oldest = f"{min(float(last_ts), lookback):.6f}"
+        messages = await self._fetch_history(channel, oldest)
         if not messages:
             return 0
 
@@ -80,13 +99,17 @@ class SourceReader:
         emitted = 0
 
         for msg in messages:
-            event = normalize.message_to_event(channel, msg)
-            if event is not None and not await self._is_echo(event.channel, event.ts):
-                await self._queue.put(event)
-                emitted += 1
-            newest = max(newest, str(msg.get("ts", "0")), key=float)
+            ts = str(msg.get("ts", "0"))
+            # Messages at or before the cursor were already mirrored; a rescan
+            # only returns them to check their threads.
+            if last_ts is None or float(ts) > float(last_ts):
+                event = normalize.message_to_event(channel, msg)
+                if event is not None and await self._emit(event):
+                    emitted += 1
+                newest = max(newest, ts, key=float)
 
-            # Follow threads whose replies are newer than our cursor.
+            # Follow threads with replies newer than our cursor, whether the
+            # parent is new or (on a rescan) older than the cursor.
             latest_reply = msg.get("latest_reply")
             if latest_reply and (last_ts is None or float(latest_reply) > float(last_ts)):
                 emitted += await self._poll_thread(channel, str(msg["ts"]), last_ts)
@@ -105,10 +128,60 @@ class SourceReader:
             if str(msg.get("ts")) == parent_ts:
                 continue
             event = normalize.message_to_event(channel, msg)
-            if event is not None and not await self._is_echo(event.channel, event.ts):
-                await self._queue.put(event)
+            if event is not None and await self._emit(event):
                 emitted += 1
         return emitted
+
+    async def _emit(self, event: SourceEvent) -> bool:
+        """Queue an event unless it's our own echo. Returns True if queued.
+
+        A reply whose parent was never mirrored gets the parent queued first,
+        so the poster can thread the reply under it instead of posting it
+        top-level.
+        """
+        if await self._is_echo(event.channel, event.ts):
+            return False
+        is_reply = bool(event.thread_ts) and event.thread_ts != event.ts
+        # Edits count too: the poster creates an edited message it never saw.
+        if event.kind in (EventKind.CREATE, EventKind.EDIT):
+            if is_reply:
+                await self._ensure_parent(event.channel, str(event.thread_ts))
+            else:
+                self._remember_root(event.channel, event.ts)
+        await self._queue.put(event)
+        return True
+
+    async def _ensure_parent(self, channel: str, parent_ts: str) -> None:
+        """Queue a thread's parent if it isn't mirrored or already queued."""
+        if (channel, parent_ts) in self._queued_roots:
+            return
+        if await self._store.get_target_ts(channel, parent_ts):
+            return
+        if await self._is_echo(channel, parent_ts):
+            return
+        try:
+            body = await self._client.conversations_replies(channel, parent_ts, limit=1)
+        except AuthError:
+            raise
+        except Exception as exc:
+            log.warning("channel %s: could not fetch thread parent %s: %s", channel, parent_ts, exc)
+            return
+        parent = next(
+            (m for m in body.get("messages", []) if str(m.get("ts")) == parent_ts), None
+        )
+        event = normalize.message_to_event(channel, parent) if parent else None
+        if event is None:
+            log.warning("channel %s: thread parent %s not found", channel, parent_ts)
+            return
+        log.info("channel %s: mirroring thread parent %s before its reply", channel, parent_ts)
+        self._remember_root(channel, parent_ts)
+        await self._queue.put(event)
+
+    def _remember_root(self, channel: str, ts: str) -> None:
+        self._queued_roots[(channel, ts)] = None
+        self._queued_roots.move_to_end((channel, ts))
+        while len(self._queued_roots) > _QUEUED_ROOTS_MAX:
+            self._queued_roots.popitem(last=False)
 
     async def _is_echo(self, channel: str, ts: str) -> bool:
         """True if this HS message was posted by our own reverse relay.
@@ -148,9 +221,13 @@ class SourceReader:
 
     async def run_polling(self, stop: Optional[asyncio.Event] = None) -> None:
         interval = self._config.poll_interval_seconds
+        last_rescan = time.monotonic()
         while stop is None or not stop.is_set():
+            rescan = time.monotonic() - last_rescan >= self._config.thread_rescan_seconds
             try:
-                n = await self.poll_once()
+                n = await self.poll_once(rescan_threads=rescan)
+                if rescan:
+                    last_rescan = time.monotonic()
                 if n:
                     log.debug("polled: %d events", n)
             except AuthError:
@@ -184,9 +261,8 @@ class SourceReader:
                 event = normalize.rtm_event_to_event(evt)
                 if event is None or event.channel not in allowed:
                     continue
-                if await self._is_echo(event.channel, event.ts):
+                if not await self._emit(event):
                     continue
-                await self._queue.put(event)
                 if event.ts:
                     prev = await self._store.get_last_ts(event.channel)
                     if prev is None or float(event.ts) > float(prev):

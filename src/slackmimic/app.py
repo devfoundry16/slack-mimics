@@ -47,32 +47,51 @@ async def _consume(
 async def _run_source(
     reader: SourceReader, config: Config, stop: asyncio.Event, backfill_days: float
 ) -> None:
-    """Prefer the websocket transport; fall back to polling on failure."""
+    """Prefer the websocket transport; fall back to polling on failure.
+
+    Every catch-up poll rescans recent threads, since replies to older threads
+    posted while disconnected don't show up in plain channel history.
+    """
     await reader.initialize_cursors(backfill_days)
     if backfill_days > 0:
         log.info("backfilling up to %g day(s) of history…", backfill_days)
     # Catch up on anything missed since the last run.
     try:
-        await reader.poll_once()
+        await reader.poll_once(rescan_threads=True)
     except AuthError:
         raise
     except Exception as exc:
         log.warning("initial catch-up poll failed: %s", exc)
 
-    if config.use_websocket:
-        while not stop.is_set():
+    if not config.use_websocket:
+        await reader.run_polling(stop)
+        return
+
+    while not stop.is_set():
+        try:
+            await reader.run_websocket(stop)
+            # Clean return means the socket closed; reconnect after catch-up.
+            await reader.poll_once(rescan_threads=True)
+        except AuthError:
+            raise
+        except Exception as exc:
+            retry = config.websocket_retry_seconds
+            log.warning(
+                "websocket unavailable (%s); polling for %.0fs before retrying", exc, retry
+            )
             try:
-                await reader.run_websocket(stop)
-                # Clean return means the socket closed; reconnect after catch-up.
-                await reader.poll_once()
+                await asyncio.wait_for(reader.run_polling(stop), timeout=retry)
+            except asyncio.TimeoutError:
+                pass
+            if stop.is_set():
+                return
+            log.info("retrying websocket")
+            try:
+                await reader.poll_once(rescan_threads=True)
             except AuthError:
                 raise
-            except Exception as exc:
-                log.warning("websocket unavailable (%s); falling back to polling", exc)
-                await reader.run_polling(stop)
-                return
-    else:
-        await reader.run_polling(stop)
+            except Exception as poll_exc:
+                log.warning("catch-up poll failed: %s", poll_exc)
 
 
 async def run(config: Config, backfill_days: Optional[float] = None) -> None:
