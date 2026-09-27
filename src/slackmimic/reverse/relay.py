@@ -22,6 +22,20 @@ from .detector import is_eligible
 log = logging.getLogger(__name__)
 
 
+async def resolve_hs_thread(store: StateStore, pending: PendingOutbound) -> Optional[str]:
+    """HeartStamp thread ts for a vanta-core thread reply, or None to post top-level.
+
+    The vanta-core thread root is found in the message map when it's a
+    mirrored HS message or a message this relay already sent to HS.
+    """
+    if not pending.thread_ts:
+        return None
+    mapping = await store.get_source_ts(pending.target_channel, pending.thread_ts)
+    if not mapping or mapping[0] != pending.source_channel:
+        return None
+    return mapping[1]
+
+
 def build_relay_app(config: Config, store: StateStore, hs_client: HeartStampClient):
     """Build the Bolt AsyncApp with all reverse-relay handlers wired up."""
     from slack_bolt.async_app import AsyncApp
@@ -48,6 +62,9 @@ def build_relay_app(config: Config, store: StateStore, hs_client: HeartStampClie
         source = config.source_for(event["channel"])
         if not source:
             return  # message in a channel that isn't mapped for relay
+        thread_ts = str(event.get("thread_ts") or "")
+        if thread_ts == str(event["ts"]):
+            thread_ts = ""  # a thread's own root isn't a reply
         pending = PendingOutbound(
             id=uuid.uuid4().hex,
             target_channel=str(event["channel"]),
@@ -58,15 +75,20 @@ def build_relay_app(config: Config, store: StateStore, hs_client: HeartStampClie
             card_channel="",
             card_ts="",
             created_at=time.time(),
+            thread_ts=thread_ts,
         )
         await store.create_pending(pending)
+        hs_thread_ts = await resolve_hs_thread(store, pending)
         label = config.label_for_target(pending.target_channel)
         dm = await client.conversations_open(users=config.owner_member_id)
         card_channel = dm["channel"]["id"]
         res = await client.chat_postMessage(
             channel=card_channel,
             blocks=cards.pending_card_blocks(
-                pending, label, author_id=str(event.get("user", ""))
+                pending,
+                label,
+                author_id=str(event.get("user", "")),
+                hs_thread_ts=hs_thread_ts or "",
             ),
             text=f"Message pending approval for #{label}",
         )
@@ -104,10 +126,19 @@ def build_relay_app(config: Config, store: StateStore, hs_client: HeartStampClie
             view["state"]["values"][cards.MODAL_BLOCK][cards.MODAL_INPUT].get("value")
             or ""
         )
-        # Post to HeartStamp as the owner, then record for anti-echo so the
-        # forward mirror doesn't bounce it back into vanta-core.
-        hs_ts = await hs_client.chat_post_message(pending.source_channel, text)
+        # Post to HeartStamp as the owner (into the matching thread for a
+        # reply), then record for anti-echo so the forward mirror doesn't
+        # bounce it back into vanta-core. The mapping links the HS copy to the
+        # original vanta-core message, so replies on either side thread under
+        # it.
+        hs_thread_ts = await resolve_hs_thread(store, pending)
+        hs_ts = await hs_client.chat_post_message(
+            pending.source_channel, text, thread_ts=hs_thread_ts
+        )
         await store.record_reverse_post(pending.source_channel, hs_ts)
+        await store.record_mapping(
+            pending.source_channel, hs_ts, pending.target_channel, pending.target_ts
+        )
         await store.set_pending_status(pending.id, "sent")
         label = config.label_for_target(pending.target_channel)
         await _update_card(client, pending, label, sent=True, text=text)

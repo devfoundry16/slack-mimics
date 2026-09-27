@@ -23,25 +23,36 @@ def _preview(text: str, limit: int = 300) -> str:
 
 
 def pending_card_blocks(
-    pending: PendingOutbound, hs_label: str, author_id: str = ""
+    pending: PendingOutbound,
+    hs_label: str,
+    author_id: str = "",
+    hs_thread_ts: str = "",
 ) -> list[dict]:
     """Card shown to the owner for a message awaiting approval.
 
     ``author_id`` names the vanta-core member who wrote it — the owner approves
     everyone's messages, so the card has to say whose words these are. Omitted
     when unknown; the relayed text itself is never altered.
+
+    For a thread reply (``pending.thread_ts``), ``hs_thread_ts`` is the matching
+    HeartStamp thread; when it's empty the card warns that the reply will land
+    in the channel instead.
     """
-    author: list[dict] = (
-        [
+    notes: list[dict] = []
+    if author_id:
+        notes.append({"type": "mrkdwn", "text": f"From <@{author_id}>"})
+    if pending.thread_ts:
+        notes.append(
             {
-                "type": "context",
-                "elements": [{"type": "mrkdwn", "text": f"From <@{author_id}>"}],
+                "type": "mrkdwn",
+                "text": "↳ Reply in thread"
+                if hs_thread_ts
+                else "↳ Thread reply — its parent isn't in HeartStamp, "
+                "so this will post to the channel",
             }
-        ]
-        if author_id
-        else []
-    )
-    return author + [
+        )
+    context: list[dict] = [{"type": "context", "elements": notes}] if notes else []
+    return context + [
         {
             "type": "section",
             "text": {

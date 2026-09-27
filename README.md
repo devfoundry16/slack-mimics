@@ -344,6 +344,13 @@ identity, the approval card always comes to you — never to the author.
    nothing reaches HeartStamp without your click. `owner_member_id` is who
    receives the approval cards.
 
+**Threads:** a reply in a thread in your workspace is sent into the matching
+HeartStamp thread when its parent is a mirrored HeartStamp message or one you
+relayed; the card says **↳ Reply in thread**. Otherwise the card warns that it
+will post to the channel. Replies in HeartStamp to a message you relayed thread
+under the original message in your workspace. Messages relayed before this was
+added aren't linked, so replies to those still arrive top-level.
+
 ---
 
 ## 16. Always-on

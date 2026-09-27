@@ -169,3 +169,48 @@ async def test_reader_emits_non_echo(store2):
     emitted = await reader.poll_once()
     assert emitted == 1
     assert not q.empty()
+
+
+# --- threads -----------------------------------------------------------------
+
+def _reply_pending(thread_ts="1.1"):
+    return PendingOutbound(
+        id="p2", target_channel="C_DST", target_ts="2.2", source_channel="C_SRC",
+        text="re", status="pending", card_channel="", card_ts="", created_at=0.0,
+        thread_ts=thread_ts,
+    )
+
+
+def test_eligible_thread_broadcast():
+    assert is_eligible(_msg(subtype="thread_broadcast", thread_ts="1.0")) is True
+
+
+def test_pending_card_marks_thread_reply():
+    in_thread = cards.pending_card_blocks(_reply_pending(), "general", hs_thread_ts="5.5")
+    assert "Reply in thread" in str(in_thread)
+    orphan = cards.pending_card_blocks(_reply_pending(), "general")
+    assert "post to the channel" in str(orphan)
+
+
+async def test_pending_roundtrip_keeps_thread(store):
+    await store.create_pending(_reply_pending())
+    assert (await store.get_pending("p2")).thread_ts == "1.1"
+
+
+async def test_resolve_hs_thread(store):
+    from slackmimic.reverse.relay import resolve_hs_thread
+
+    # Not a reply → top-level.
+    assert await resolve_hs_thread(store, _reply_pending(thread_ts="")) is None
+    # Thread root unknown → top-level.
+    assert await resolve_hs_thread(store, _reply_pending()) is None
+    # Root is a mirrored (or previously relayed) HS message → that HS thread.
+    await store.record_mapping("C_SRC", "5.5", "C_DST", "1.1")
+    assert await resolve_hs_thread(store, _reply_pending()) == "5.5"
+
+
+async def test_resolve_hs_thread_ignores_other_channel(store):
+    from slackmimic.reverse.relay import resolve_hs_thread
+
+    await store.record_mapping("C_OTHER", "5.5", "C_DST", "1.1")
+    assert await resolve_hs_thread(store, _reply_pending()) is None

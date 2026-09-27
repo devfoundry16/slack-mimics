@@ -54,3 +54,44 @@ async def test_not_connected_raises(tmp_path):
     s = StateStore(str(tmp_path / "x.sqlite3"))
     with pytest.raises(RuntimeError, match="not connected"):
         await s.get_last_ts("C1")
+
+
+async def test_message_map_reverse_lookup(store):
+    assert await store.get_source_ts("D1", "9.9") is None
+    await store.record_mapping("C1", "1.1", "D1", "9.9")
+    assert await store.get_source_ts("D1", "9.9") == ("C1", "1.1")
+
+
+async def test_migrates_pending_outbound_thread_ts(tmp_path):
+    import sqlite3
+
+    from slackmimic.state.store import PendingOutbound
+
+    path = str(tmp_path / "old.sqlite3")
+    # The pending_outbound table as it was before thread_ts existed.
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE pending_outbound (
+                id TEXT PRIMARY KEY, target_channel TEXT NOT NULL,
+                target_ts TEXT NOT NULL, source_channel TEXT NOT NULL,
+                text TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+                card_channel TEXT NOT NULL DEFAULT '', card_ts TEXT NOT NULL DEFAULT '',
+                created_at REAL NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO pending_outbound (id, target_channel, target_ts, source_channel,"
+            " text, created_at) VALUES ('old', 'D1', '1.1', 'C1', 'hi', 0)"
+        )
+
+    async with StateStore(path) as s:
+        assert (await s.get_pending("old")).thread_ts == ""
+        p = PendingOutbound(
+            id="new", target_channel="D1", target_ts="2.2", source_channel="C1",
+            text="re", status="pending", card_channel="", card_ts="", created_at=0.0,
+            thread_ts="1.1",
+        )
+        await s.create_pending(p)
+        assert await s.get_pending("new") == p

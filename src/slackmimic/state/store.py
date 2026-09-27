@@ -30,6 +30,10 @@ CREATE TABLE IF NOT EXISTS message_map (
     PRIMARY KEY (source_channel, source_ts)
 );
 
+-- Reverse lookups (target -> source) for threading relayed replies.
+CREATE INDEX IF NOT EXISTS message_map_target
+    ON message_map (target_channel, target_ts);
+
 CREATE TABLE IF NOT EXISTS users (
     user_id  TEXT PRIMARY KEY,
     name     TEXT NOT NULL,
@@ -45,7 +49,8 @@ CREATE TABLE IF NOT EXISTS pending_outbound (
     status         TEXT NOT NULL DEFAULT 'pending',
     card_channel   TEXT NOT NULL DEFAULT '',
     card_ts        TEXT NOT NULL DEFAULT '',
-    created_at     REAL NOT NULL
+    created_at     REAL NOT NULL,
+    thread_ts      TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS reverse_posts (
@@ -74,6 +79,8 @@ class PendingOutbound:
     card_channel: str
     card_ts: str
     created_at: float
+    # vanta-core thread root when the message is a thread reply; "" otherwise.
+    thread_ts: str = ""
 
 
 class StateStore:
@@ -90,8 +97,18 @@ class StateStore:
         self._db = await aiosqlite.connect(self._db_path)
         self._db.row_factory = aiosqlite.Row
         await self._db.executescript(_SCHEMA)
+        await self._migrate()
         await self._db.commit()
         return self
+
+    async def _migrate(self) -> None:
+        """Add columns introduced after a database was first created."""
+        cur = await self._conn.execute("PRAGMA table_info(pending_outbound)")
+        columns = {row["name"] for row in await cur.fetchall()}
+        if "thread_ts" not in columns:
+            await self._conn.execute(
+                "ALTER TABLE pending_outbound ADD COLUMN thread_ts TEXT NOT NULL DEFAULT ''"
+            )
 
     async def close(self) -> None:
         if self._db is not None:
@@ -166,6 +183,20 @@ class StateStore:
         row = await cur.fetchone()
         return (row["target_channel"], row["target_ts"]) if row else None
 
+    async def get_source_ts(
+        self, target_channel: str, target_ts: str
+    ) -> Optional[tuple[str, str]]:
+        """Return ``(source_channel, source_ts)`` for a target message, if known."""
+        cur = await self._conn.execute(
+            """
+            SELECT source_channel, source_ts FROM message_map
+            WHERE target_channel = ? AND target_ts = ?
+            """,
+            (target_channel, target_ts),
+        )
+        row = await cur.fetchone()
+        return (row["source_channel"], row["source_ts"]) if row else None
+
     async def delete_mapping(self, source_channel: str, source_ts: str) -> None:
         await self._conn.execute(
             "DELETE FROM message_map WHERE source_channel = ? AND source_ts = ?",
@@ -204,8 +235,8 @@ class StateStore:
             """
             INSERT OR REPLACE INTO pending_outbound
                 (id, target_channel, target_ts, source_channel, text,
-                 status, card_channel, card_ts, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 status, card_channel, card_ts, created_at, thread_ts)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 pending.id,
@@ -217,6 +248,7 @@ class StateStore:
                 pending.card_channel,
                 pending.card_ts,
                 pending.created_at,
+                pending.thread_ts,
             ),
         )
         await self._conn.commit()
@@ -238,6 +270,7 @@ class StateStore:
             card_channel=row["card_channel"],
             card_ts=row["card_ts"],
             created_at=row["created_at"],
+            thread_ts=row["thread_ts"],
         )
 
     async def set_pending_card(
