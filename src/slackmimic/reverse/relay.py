@@ -99,6 +99,7 @@ def build_relay_app(config: Config, store: StateStore, hs_client: HeartStampClie
                 label,
                 author_id=str(event.get("user", "")),
                 hs_thread_ts=hs_thread_ts or "",
+                file_count=len(event.get("files") or []),
             ),
             text=f"Message pending approval for #{label}",
         )

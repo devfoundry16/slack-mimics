@@ -27,6 +27,7 @@ def pending_card_blocks(
     hs_label: str,
     author_id: str = "",
     hs_thread_ts: str = "",
+    file_count: int = 0,
 ) -> list[dict]:
     """Card shown to the owner for a message awaiting approval.
 
@@ -37,6 +38,9 @@ def pending_card_blocks(
     For a thread reply (``pending.thread_ts``), ``hs_thread_ts`` is the matching
     HeartStamp thread; when it's empty the card warns that the reply will land
     in the channel instead.
+
+    ``file_count`` is the number of files on the message; only the text is
+    relayed, so the card says the files won't reach HeartStamp.
     """
     notes: list[dict] = []
     if author_id:
@@ -49,6 +53,14 @@ def pending_card_blocks(
                 if hs_thread_ts
                 else "↳ Thread reply — its parent isn't in HeartStamp, "
                 "so this will post to the channel",
+            }
+        )
+    if file_count:
+        plural = "attachment" if file_count == 1 else "attachments"
+        notes.append(
+            {
+                "type": "mrkdwn",
+                "text": f"📎 {file_count} {plural} not sent — only the text goes to HeartStamp",
             }
         )
     context: list[dict] = [{"type": "context", "elements": notes}] if notes else []

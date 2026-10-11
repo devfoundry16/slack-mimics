@@ -214,3 +214,25 @@ async def test_resolve_hs_thread_ignores_other_channel(store):
 
     await store.record_mapping("C_OTHER", "5.5", "C_DST", "1.1")
     assert await resolve_hs_thread(store, _reply_pending()) is None
+
+
+# --- messages with files ------------------------------------------------------
+
+def test_eligible_message_with_file_and_text():
+    assert is_eligible(_msg(subtype="file_share", files=[{"id": "F1"}])) is True
+
+
+def test_reject_file_only_message():
+    """Nothing to relay: only the text is sent to HeartStamp."""
+    assert is_eligible(_msg(subtype="file_share", text="", files=[{"id": "F1"}])) is False
+
+
+def test_pending_card_warns_files_are_not_sent():
+    blocks = cards.pending_card_blocks(_pending(), "general", file_count=2)
+    notes = " ".join(e["text"] for b in blocks if b["type"] == "context" for e in b["elements"])
+    assert "2 attachments" in notes and "not sent" in notes
+
+
+def test_pending_card_without_files_has_no_attachment_note():
+    blocks = cards.pending_card_blocks(_pending(), "general")
+    assert "attachment" not in str(blocks)
