@@ -210,7 +210,17 @@ class HeartStampClient:
         return str(body["ts"])
 
     async def download_file(self, url_private: str) -> bytes:
-        """Download a private file using the session credentials."""
-        resp = await self._client.get(url_private)
+        """Download a private file using the session credentials.
+
+        The session token and cookie go out with every request, so only https
+        URLs on Slack's own hosts are fetched, without following redirects.
+        File URLs can come from message attachments, which any API caller in
+        HS can fill in.
+        """
+        url = httpx.URL(url_private)
+        host = url.host or ""
+        if url.scheme != "https" or not (host == "slack.com" or host.endswith(".slack.com")):
+            raise ValueError(f"refusing to download a file from outside Slack: {url_private!r}")
+        resp = await self._client.get(url, follow_redirects=False)
         resp.raise_for_status()
         return resp.content
