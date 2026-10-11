@@ -76,10 +76,13 @@ CREATE TABLE IF NOT EXISTS reverse_posts (
     PRIMARY KEY (source_channel, source_ts)
 );
 
--- HS file ids the relay uploaded: their message's ts isn't known in time for
--- reverse_posts, so the forward mirror recognises the echo by file id.
+-- HS file ids the relay uploaded, per channel: their message's ts isn't known
+-- in time for reverse_posts, so until it is the forward mirror recognises the
+-- echo by file id. Cleared once the ts is recorded.
 CREATE TABLE IF NOT EXISTS reverse_files (
-    file_id TEXT PRIMARY KEY
+    source_channel TEXT NOT NULL,
+    file_id        TEXT NOT NULL,
+    PRIMARY KEY (source_channel, file_id)
 );
 """
 
@@ -138,6 +141,12 @@ class StateStore:
             await self._conn.execute(
                 "ALTER TABLE pending_outbound ADD COLUMN files TEXT NOT NULL DEFAULT '[]'"
             )
+        # reverse_files was first created without a channel. Its rows only
+        # cover sends whose message ts wasn't found yet, so it is recreated.
+        cur = await self._conn.execute("PRAGMA table_info(reverse_files)")
+        if "source_channel" not in {row["name"] for row in await cur.fetchall()}:
+            await self._conn.execute("DROP TABLE reverse_files")
+            await self._conn.executescript(_SCHEMA)
 
     async def close(self) -> None:
         if self._db is not None:
@@ -382,19 +391,28 @@ class StateStore:
         )
         return await cur.fetchone() is not None
 
-    async def record_reverse_files(self, file_ids: list[str]) -> None:
+    async def record_reverse_files(self, source_channel: str, file_ids: list[str]) -> None:
         await self._conn.executemany(
-            "INSERT OR IGNORE INTO reverse_files (file_id) VALUES (?)",
-            [(f,) for f in file_ids],
+            "INSERT OR IGNORE INTO reverse_files (source_channel, file_id) VALUES (?, ?)",
+            [(source_channel, f) for f in file_ids],
         )
         await self._conn.commit()
 
-    async def has_reverse_file(self, file_ids: list[str]) -> bool:
-        """True if any of ``file_ids`` was uploaded to HS by the relay."""
+    async def forget_reverse_files(self, source_channel: str, file_ids: list[str]) -> None:
+        await self._conn.executemany(
+            "DELETE FROM reverse_files WHERE source_channel = ? AND file_id = ?",
+            [(source_channel, f) for f in file_ids],
+        )
+        await self._conn.commit()
+
+    async def has_reverse_file(self, source_channel: str, file_ids: list[str]) -> bool:
+        """True if the relay uploaded any of ``file_ids`` to ``source_channel``."""
         if not file_ids:
             return False
         marks = ",".join("?" * len(file_ids))
         cur = await self._conn.execute(
-            f"SELECT 1 FROM reverse_files WHERE file_id IN ({marks}) LIMIT 1", list(file_ids)
+            f"SELECT 1 FROM reverse_files WHERE source_channel = ? AND file_id IN ({marks})"
+            " LIMIT 1",
+            [source_channel, *file_ids],
         )
         return await cur.fetchone() is not None

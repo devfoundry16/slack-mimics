@@ -57,9 +57,25 @@ async def test_migrates_pending_outbound_files(tmp_path):
 
 
 async def test_reverse_files_roundtrip(store):
-    assert await store.has_reverse_file(["F1"]) is False
-    await store.record_reverse_files(["F1", "F2"])
-    assert await store.has_reverse_file(["F9", "F2"]) is True
+    assert await store.has_reverse_file("C_SRC", ["F1"]) is False
+    await store.record_reverse_files("C_SRC", ["F1", "F2"])
+    assert await store.has_reverse_file("C_SRC", ["F9", "F2"]) is True
+    # Scoped to the channel the file was posted to.
+    assert await store.has_reverse_file("C_OTHER", ["F2"]) is False
+    await store.forget_reverse_files("C_SRC", ["F1", "F2"])
+    assert await store.has_reverse_file("C_SRC", ["F1", "F2"]) is False
+
+
+async def test_migrates_unscoped_reverse_files(tmp_path):
+    path = str(tmp_path / "old.sqlite3")
+    db = sqlite3.connect(path)
+    db.execute("CREATE TABLE reverse_files (file_id TEXT PRIMARY KEY)")
+    db.execute("INSERT INTO reverse_files VALUES ('F1')")
+    db.commit()
+    db.close()
+    async with StateStore(path) as s:
+        await s.record_reverse_files("C_SRC", ["F2"])
+        assert await s.has_reverse_file("C_SRC", ["F2"]) is True
 
 
 # --- anti-echo -----------------------------------------------------------------
@@ -77,8 +93,30 @@ async def test_reader_skips_message_carrying_relayed_file(store):
     msg = {"ts": "100.1", "user": "U1", "text": "look", "files": [{"id": "F_UP", "name": "a.png"}]}
     q: asyncio.Queue = asyncio.Queue()
     await store.set_last_ts("C_SRC", "50.0")
-    await store.record_reverse_files(["F_UP"])
+    await store.record_reverse_files("C_SRC", ["F_UP"])
     assert await SourceReader(HistoryHS([msg]), cfg, store, q).poll_once() == 0
+
+
+async def test_reader_mirrors_forward_of_relayed_message(store):
+    """Someone forwarding the relayed message carries its file, but isn't an echo."""
+    cfg = Config(secrets=Secrets("x", "d", "b"), channels=[ChannelMap("C_SRC", "C_DST", "g")])
+    forward = {"ts": "100.1", "user": "U2", "text": "", "attachments": [{
+        "is_share": True, "author_id": "U1", "text": "look",
+        "files": [{"id": "F_UP", "name": "a.png", "url_private": "https://files.slack.com/a"}],
+    }]}
+    q: asyncio.Queue = asyncio.Queue()
+    await store.set_last_ts("C_SRC", "50.0")
+    await store.record_reverse_files("C_SRC", ["F_UP"])
+    assert await SourceReader(HistoryHS([forward]), cfg, store, q).poll_once() == 1
+
+
+async def test_reader_file_echo_is_scoped_to_channel(store):
+    cfg = Config(secrets=Secrets("x", "d", "b"), channels=[ChannelMap("C_SRC", "C_DST", "g")])
+    msg = {"ts": "100.1", "user": "U1", "text": "look", "files": [{"id": "F_UP", "name": "a.png"}]}
+    q: asyncio.Queue = asyncio.Queue()
+    await store.set_last_ts("C_SRC", "50.0")
+    await store.record_reverse_files("C_ELSEWHERE", ["F_UP"])
+    assert await SourceReader(HistoryHS([msg]), cfg, store, q).poll_once() == 1
 
 
 # --- send_pending --------------------------------------------------------------
@@ -133,10 +171,28 @@ async def test_send_files_with_text_as_one_message(store):
     assert [c[0] for c in hs.calls] == ["reserve", "reserve", "share", "find"]
     assert hs.calls[0] == ("reserve", "a.png", b"bytes:https://files.slack.com/a")
     assert hs.calls[2] == ("share", "C_SRC", [("F1", "a.png"), ("F2", "b.pdf")], "look", "9.9")
-    # Recorded before sharing, so the forward mirror never echoes it back.
-    assert await store.has_reverse_file(["F1"]) and await store.has_reverse_file(["F2"])
     assert result.hs_ts == "200.2"
     assert await store.is_reverse_post("C_SRC", "200.2")
+    # Once the ts is recorded, the file ids aren't needed for anti-echo.
+    assert await store.has_reverse_file("C_SRC", ["F1", "F2"]) is False
+
+
+async def test_send_records_file_ids_before_sharing(store):
+    seen = {}
+
+    class RecordingHS(FakeHS):
+        async def share_uploads(self, channel, uploads, *, text, thread_ts=None):
+            seen["recorded"] = await store.has_reverse_file("C_SRC", ["F1"])
+
+    await send_pending(_pending(), "look", store=store, hs=RecordingHS(), target=FakeTarget(),
+                       hs_thread_ts=None)
+    assert seen["recorded"] is True
+
+
+async def test_send_keeps_file_ids_when_ts_not_found(store):
+    await send_pending(_pending(), "look", store=store, hs=FakeHS(found_ts=None),
+                       target=FakeTarget(), hs_thread_ts=None)
+    assert await store.has_reverse_file("C_SRC", ["F1"]) is True
 
 
 async def test_send_reports_files_that_could_not_be_downloaded(store):

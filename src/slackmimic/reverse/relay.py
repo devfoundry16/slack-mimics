@@ -75,7 +75,7 @@ async def send_pending(
     if uploads:
         # Before sharing: the forward mirror may see the message before its ts
         # is known, and recognises it by these ids instead.
-        await store.record_reverse_files([fid for fid, _ in uploads])
+        await store.record_reverse_files(source, [fid for fid, _ in uploads])
         await hs.share_uploads(source, uploads, text=text, thread_ts=hs_thread_ts)
         hs_ts = await hs.find_file_message(source, uploads[0][0], thread_ts=hs_thread_ts)
     elif text.strip():
@@ -88,6 +88,8 @@ async def send_pending(
         # vanta-core message, so replies on either side thread under it.
         await store.record_reverse_post(source, hs_ts)
         await store.record_mapping(source, hs_ts, pending.target_channel, pending.target_ts)
+        # The ts now marks the echo; file ids would also match later reshares.
+        await store.forget_reverse_files(source, [fid for fid, _ in uploads])
     return SendResult(hs_ts=hs_ts, failed=failed)
 
 

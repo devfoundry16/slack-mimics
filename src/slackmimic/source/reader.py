@@ -39,6 +39,20 @@ _QUEUED_ROOTS_MAX = 5000
 _MIN_HEALTHY_SECONDS = 60.0
 
 
+def _own_file_ids(event: SourceEvent) -> list[str]:
+    """Ids of the files posted with this message itself.
+
+    ``event.files`` also holds files from messages forwarded into it; someone
+    forwarding a relayed message carries its files but isn't an echo.
+    """
+    msg = event.raw
+    if msg.get("subtype") == "message_changed":
+        msg = msg.get("message") or {}
+    return [
+        str(f["id"]) for f in msg.get("files") or [] if isinstance(f, dict) and f.get("id")
+    ]
+
+
 class SourceReader:
     def __init__(
         self,
@@ -160,7 +174,7 @@ class SourceReader:
         so the poster can thread the reply under it instead of posting it
         top-level.
         """
-        if await self._is_echo(event.channel, event.ts, [f.id for f in event.files]):
+        if await self._is_echo(event.channel, event.ts, _own_file_ids(event)):
             return False
         is_reply = bool(event.thread_ts) and event.thread_ts != event.ts
         # Edits count too: the poster creates an edited message it never saw.
@@ -214,7 +228,7 @@ class SourceReader:
         """
         if await self._store.is_reverse_post(channel, ts):
             return True
-        return await self._store.has_reverse_file(file_ids or [])
+        return await self._store.has_reverse_file(channel, file_ids or [])
 
     async def _fetch_history(self, channel: str, oldest: Optional[str]) -> list[dict]:
         out: list[dict] = []
