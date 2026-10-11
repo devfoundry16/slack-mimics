@@ -13,7 +13,7 @@ from typing import Any, Optional
 
 import httpx
 
-from ..client_hs import SlackApiError
+from ..client_hs import SlackApiError, require_slack_url
 
 log = logging.getLogger(__name__)
 
@@ -143,6 +143,19 @@ class TargetClient:
 
     async def remove_reaction(self, channel: str, ts: str, name: str) -> None:
         await self._call("reactions.remove", channel=channel, timestamp=ts, name=name)
+
+    async def download_file(self, url_private: str) -> bytes:
+        """Download a file posted in this workspace (needs ``files:read``).
+
+        Without that scope Slack answers 200 with its sign-in page, so an HTML
+        response counts as a failure.
+        """
+        url = require_slack_url(url_private)
+        resp = await self._client.get(url, follow_redirects=False)
+        resp.raise_for_status()
+        if "text/html" in resp.headers.get("content-type", ""):
+            raise SlackApiError("files", "not_readable (does the bot have files:read?)")
+        return resp.content
 
     async def upload_file(
         self,

@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 
 import pytest
 
@@ -222,15 +223,34 @@ def test_eligible_message_with_file_and_text():
     assert is_eligible(_msg(subtype="file_share", files=[{"id": "F1"}])) is True
 
 
-def test_reject_file_only_message():
-    """Nothing to relay: only the text is sent to HeartStamp."""
-    assert is_eligible(_msg(subtype="file_share", text="", files=[{"id": "F1"}])) is False
+def test_eligible_file_only_message():
+    assert is_eligible(_msg(subtype="file_share", text="", files=[{"id": "F1"}])) is True
 
 
-def test_pending_card_warns_files_are_not_sent():
-    blocks = cards.pending_card_blocks(_pending(), "general", file_count=2)
+def test_reject_file_share_without_files():
+    assert is_eligible(_msg(subtype="file_share", text="", files=[])) is False
+
+
+def test_pending_card_says_files_are_sent_too():
+    p = replace(_pending(), files=(("a.png", "https://files.slack.com/a"), ("b.pdf", "https://files.slack.com/b")))
+    blocks = cards.pending_card_blocks(p, "general")
     notes = " ".join(e["text"] for b in blocks if b["type"] == "context" for e in b["elements"])
-    assert "2 attachments" in notes and "not sent" in notes
+    assert "2 attachments" in notes and "not sent" not in notes
+
+
+def test_review_modal_text_optional_for_file_only_message():
+    p = replace(_pending(), text="", files=(("a.png", "https://files.slack.com/a"),))
+    view = cards.review_modal_view(p, "general")
+    block = next(b for b in view["blocks"] if b["type"] == "input")
+    assert block["optional"] is True
+    assert "initial_value" not in block["element"]
+
+
+def test_resolved_card_shows_note_and_error():
+    sent = cards.resolved_card_blocks("general", "hi", sent=True, note="1 attachment failed: a.png")
+    assert "a.png" in str(sent)
+    failed = cards.resolved_card_blocks("general", "hi", sent=False, error="channel_not_found")
+    assert "Not sent" in str(failed) and "channel_not_found" in str(failed)
 
 
 def test_pending_card_without_files_has_no_attachment_note():

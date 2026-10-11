@@ -27,7 +27,6 @@ def pending_card_blocks(
     hs_label: str,
     author_id: str = "",
     hs_thread_ts: str = "",
-    file_count: int = 0,
 ) -> list[dict]:
     """Card shown to the owner for a message awaiting approval.
 
@@ -39,8 +38,8 @@ def pending_card_blocks(
     HeartStamp thread; when it's empty the card warns that the reply will land
     in the channel instead.
 
-    ``file_count`` is the number of files on the message; only the text is
-    relayed, so the card says the files won't reach HeartStamp.
+    Files on the message (``pending.files``) are sent with it; the card says
+    how many.
     """
     notes: list[dict] = []
     if author_id:
@@ -55,13 +54,10 @@ def pending_card_blocks(
                 "so this will post to the channel",
             }
         )
-    if file_count:
-        plural = "attachment" if file_count == 1 else "attachments"
+    if pending.files:
+        n = len(pending.files)
         notes.append(
-            {
-                "type": "mrkdwn",
-                "text": f"📎 {file_count} {plural} not sent — only the text goes to HeartStamp",
-            }
+            {"type": "mrkdwn", "text": f"📎 {n} {'attachment' if n == 1 else 'attachments'} included"}
         )
     context: list[dict] = [{"type": "context", "elements": notes}] if notes else []
     return context + [
@@ -100,6 +96,9 @@ def pending_card_blocks(
 
 def review_modal_view(pending: PendingOutbound, hs_label: str) -> dict:
     """Modal with an editable message box + Submit (send) / Cancel."""
+    element: dict = {"type": "plain_text_input", "action_id": MODAL_INPUT, "multiline": True}
+    if pending.text:
+        element["initial_value"] = pending.text  # Slack rejects an empty one
     return {
         "type": "modal",
         "callback_id": MODAL_CALLBACK,
@@ -118,23 +117,34 @@ def review_modal_view(pending: PendingOutbound, hs_label: str) -> dict:
                 "type": "input",
                 "block_id": MODAL_BLOCK,
                 "label": {"type": "plain_text", "text": "Message"},
-                "element": {
-                    "type": "plain_text_input",
-                    "action_id": MODAL_INPUT,
-                    "multiline": True,
-                    "initial_value": pending.text,
-                },
+                # A message that is only files can be sent without text.
+                "optional": bool(pending.files),
+                "element": element,
             },
         ],
     }
 
 
-def resolved_card_blocks(hs_label: str, text: str, *, sent: bool) -> list[dict]:
-    """Card contents after the owner sends or discards."""
-    status = f"✅ Sent to *#{hs_label}*" if sent else f"❌ Discarded (*#{hs_label}*)"
-    return [
+def resolved_card_blocks(
+    hs_label: str, text: str, *, sent: bool, note: str = "", error: str = ""
+) -> list[dict]:
+    """Card contents after the owner sends or discards, or after sending failed.
+
+    ``note`` adds a line (e.g. attachments that couldn't be sent); ``error``
+    marks a send that failed.
+    """
+    if error:
+        status = f"⚠️ Not sent to *#{hs_label}*: {error}"
+    elif sent:
+        status = f"✅ Sent to *#{hs_label}*"
+    else:
+        status = f"❌ Discarded (*#{hs_label}*)"
+    blocks: list[dict] = [
         {
             "type": "section",
             "text": {"type": "mrkdwn", "text": f"{status}\n\n>{_preview(text)}"},
         }
     ]
+    if note:
+        blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": note}]})
+    return blocks

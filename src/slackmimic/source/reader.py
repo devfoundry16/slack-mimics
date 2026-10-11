@@ -160,7 +160,7 @@ class SourceReader:
         so the poster can thread the reply under it instead of posting it
         top-level.
         """
-        if await self._is_echo(event.channel, event.ts):
+        if await self._is_echo(event.channel, event.ts, [f.id for f in event.files]):
             return False
         is_reply = bool(event.thread_ts) and event.thread_ts != event.ts
         # Edits count too: the poster creates an edited message it never saw.
@@ -204,13 +204,17 @@ class SourceReader:
         while len(self._queued_roots) > _QUEUED_ROOTS_MAX:
             self._queued_roots.popitem(last=False)
 
-    async def _is_echo(self, channel: str, ts: str) -> bool:
+    async def _is_echo(self, channel: str, ts: str, file_ids: Optional[list[str]] = None) -> bool:
         """True if this HS message was posted by our own reverse relay.
 
         Without this, a message John approved into HS would be read back here
-        and mirrored into vanta-core, duplicating his original.
+        and mirrored into vanta-core, duplicating his original. A message with
+        files the relay uploaded is matched by file id, since its ts isn't
+        known when it first appears.
         """
-        return await self._store.is_reverse_post(channel, ts)
+        if await self._store.is_reverse_post(channel, ts):
+            return True
+        return await self._store.has_reverse_file(file_ids or [])
 
     async def _fetch_history(self, channel: str, oldest: Optional[str]) -> list[dict]:
         out: list[dict] = []

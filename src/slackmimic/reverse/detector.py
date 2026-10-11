@@ -6,8 +6,8 @@ approves every one of them, since the relay posts to HeartStamp under the
 owner's identity. This deliberately excludes:
 - the forward mirror's own posts (they carry ``bot_id``/``app_id``),
 - edits/joins/other subtypes (except ``thread_broadcast`` replies and
-  ``file_share`` messages, whose text is relayed without the files),
-  authorless events, and empty messages.
+  ``file_share`` messages, sent with their files),
+  authorless events, and messages with neither text nor files.
 """
 
 from __future__ import annotations
@@ -28,6 +28,6 @@ def is_eligible(event: dict[str, Any]) -> bool:
         return False
     if not str(event.get("user", "")).strip():  # authorless event
         return False
-    if not str(event.get("text", "")).strip():
+    if not str(event.get("text", "")).strip() and not event.get("files"):
         return False
     return True

@@ -153,7 +153,7 @@ async def run(
             from .reverse.relay import run_relay
 
             log.info("reverse relay enabled (approval-gated vanta-core → HS)")
-            tasks.add(asyncio.create_task(run_relay(config, store, hs)))
+            tasks.add(asyncio.create_task(run_relay(config, store, hs, target)))
         else:
             log.info("reverse relay disabled (reverse_enabled is not set in config.yaml)")
 

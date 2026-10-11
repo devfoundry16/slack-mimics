@@ -15,6 +15,7 @@ All three tables are what make the daemon resumable and idempotent:
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Optional
 
@@ -65,13 +66,20 @@ CREATE TABLE IF NOT EXISTS pending_outbound (
     card_channel   TEXT NOT NULL DEFAULT '',
     card_ts        TEXT NOT NULL DEFAULT '',
     created_at     REAL NOT NULL,
-    thread_ts      TEXT NOT NULL DEFAULT ''
+    thread_ts      TEXT NOT NULL DEFAULT '',
+    files          TEXT NOT NULL DEFAULT '[]'
 );
 
 CREATE TABLE IF NOT EXISTS reverse_posts (
     source_channel TEXT NOT NULL,
     source_ts      TEXT NOT NULL,
     PRIMARY KEY (source_channel, source_ts)
+);
+
+-- HS file ids the relay uploaded: their message's ts isn't known in time for
+-- reverse_posts, so the forward mirror recognises the echo by file id.
+CREATE TABLE IF NOT EXISTS reverse_files (
+    file_id TEXT PRIMARY KEY
 );
 """
 
@@ -96,6 +104,8 @@ class PendingOutbound:
     created_at: float
     # vanta-core thread root when the message is a thread reply; "" otherwise.
     thread_ts: str = ""
+    # (name, url_private) of each file on the vanta-core message.
+    files: tuple[tuple[str, str], ...] = ()
 
 
 class StateStore:
@@ -123,6 +133,10 @@ class StateStore:
         if "thread_ts" not in columns:
             await self._conn.execute(
                 "ALTER TABLE pending_outbound ADD COLUMN thread_ts TEXT NOT NULL DEFAULT ''"
+            )
+        if "files" not in columns:
+            await self._conn.execute(
+                "ALTER TABLE pending_outbound ADD COLUMN files TEXT NOT NULL DEFAULT '[]'"
             )
 
     async def close(self) -> None:
@@ -293,8 +307,8 @@ class StateStore:
             """
             INSERT OR REPLACE INTO pending_outbound
                 (id, target_channel, target_ts, source_channel, text,
-                 status, card_channel, card_ts, created_at, thread_ts)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 status, card_channel, card_ts, created_at, thread_ts, files)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 pending.id,
@@ -307,6 +321,7 @@ class StateStore:
                 pending.card_ts,
                 pending.created_at,
                 pending.thread_ts,
+                json.dumps([list(f) for f in pending.files]),
             ),
         )
         await self._conn.commit()
@@ -329,6 +344,7 @@ class StateStore:
             card_ts=row["card_ts"],
             created_at=row["created_at"],
             thread_ts=row["thread_ts"],
+            files=tuple((str(n), str(u)) for n, u in json.loads(row["files"] or "[]")),
         )
 
     async def set_pending_card(
@@ -363,5 +379,22 @@ class StateStore:
         cur = await self._conn.execute(
             "SELECT 1 FROM reverse_posts WHERE source_channel = ? AND source_ts = ?",
             (source_channel, source_ts),
+        )
+        return await cur.fetchone() is not None
+
+    async def record_reverse_files(self, file_ids: list[str]) -> None:
+        await self._conn.executemany(
+            "INSERT OR IGNORE INTO reverse_files (file_id) VALUES (?)",
+            [(f,) for f in file_ids],
+        )
+        await self._conn.commit()
+
+    async def has_reverse_file(self, file_ids: list[str]) -> bool:
+        """True if any of ``file_ids`` was uploaded to HS by the relay."""
+        if not file_ids:
+            return False
+        marks = ",".join("?" * len(file_ids))
+        cur = await self._conn.execute(
+            f"SELECT 1 FROM reverse_files WHERE file_id IN ({marks}) LIMIT 1", list(file_ids)
         )
         return await cur.fetchone() is not None

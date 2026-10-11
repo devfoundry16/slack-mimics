@@ -4,12 +4,14 @@ This talks to Slack's Web API the way the browser client does: an ``xoxc-``
 token passed as a bearer/form token, together with the ``d`` cookie. Both are
 required — the token alone is rejected.
 
-Only read endpoints are used here. Nothing in this module writes to HS.
+Almost every endpoint here only reads. The writes (``chat_post_message`` and
+the upload methods) are used only by the approval-gated reverse relay.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import Any, Optional
 
@@ -31,6 +33,19 @@ class SlackApiError(Exception):
         super().__init__(f"{method}: {error}")
         self.method = method
         self.error = error
+
+
+def require_slack_url(url: str) -> httpx.URL:
+    """``url`` parsed, or ValueError unless it is https on slack.com or a subdomain.
+
+    Both clients attach their credentials to every request, so file downloads
+    and uploads only go to Slack's own hosts.
+    """
+    parsed = httpx.URL(url)
+    host = parsed.host or ""
+    if parsed.scheme != "https" or not (host == "slack.com" or host.endswith(".slack.com")):
+        raise ValueError(f"refusing to send credentials outside Slack: {url!r}")
+    return parsed
 
 
 # Slack error codes that mean the credentials are no longer valid.
@@ -209,6 +224,63 @@ class HeartStampClient:
         )
         return str(body["ts"])
 
+    async def reserve_upload(self, filename: str, content: bytes) -> str:
+        """Upload a file's bytes to HS, unshared; returns its file id.
+
+        :meth:`share_uploads` then posts it. Splitting the two lets the relay
+        record the id first, so the forward mirror never echoes the message.
+        """
+        body = await self._call(
+            "files.getUploadURLExternal", filename=filename, length=len(content)
+        )
+        url = require_slack_url(str(body["upload_url"]))
+        resp = await self._client.post(url, content=content, follow_redirects=False)
+        resp.raise_for_status()
+        return str(body["file_id"])
+
+    async def share_uploads(
+        self,
+        channel: str,
+        uploads: list[tuple[str, str]],
+        *,
+        text: str,
+        thread_ts: Optional[str] = None,
+    ) -> None:
+        """Post reserved uploads ``(file_id, title)`` as one message with ``text``."""
+        await self._call(
+            "files.completeUploadExternal",
+            files=json.dumps([{"id": fid, "title": title} for fid, title in uploads]),
+            channel_id=channel,
+            initial_comment=text or None,
+            thread_ts=thread_ts,
+        )
+
+    async def find_file_message(
+        self,
+        channel: str,
+        file_id: str,
+        *,
+        thread_ts: Optional[str] = None,
+        attempts: int = 5,
+        delay: float = 1.0,
+    ) -> Optional[str]:
+        """ts of the message carrying ``file_id``, or None if it doesn't show up.
+
+        Sharing an upload doesn't return the message ts, and the message can
+        take a moment to appear.
+        """
+        for attempt in range(attempts):
+            if thread_ts:
+                body = await self.conversations_replies(channel, thread_ts, limit=50)
+            else:
+                body = await self._call("conversations.history", channel=channel, limit=20)
+            for msg in body.get("messages", []):
+                if any(f.get("id") == file_id for f in msg.get("files") or []):
+                    return str(msg["ts"])
+            if attempt < attempts - 1:
+                await asyncio.sleep(delay)
+        return None
+
     async def download_file(self, url_private: str) -> bytes:
         """Download a private file using the session credentials.
 
@@ -217,10 +289,7 @@ class HeartStampClient:
         File URLs can come from message attachments, which any API caller in
         HS can fill in.
         """
-        url = httpx.URL(url_private)
-        host = url.host or ""
-        if url.scheme != "https" or not (host == "slack.com" or host.endswith(".slack.com")):
-            raise ValueError(f"refusing to download a file from outside Slack: {url_private!r}")
+        url = require_slack_url(url_private)
         resp = await self._client.get(url, follow_redirects=False)
         resp.raise_for_status()
         return resp.content
