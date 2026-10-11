@@ -3,6 +3,7 @@ import time
 
 import pytest
 
+from slackmimic.client_hs import SlackApiError
 from slackmimic.config import ChannelMap, Config, Secrets
 from slackmimic.source.reader import SourceReader
 from slackmimic.state.store import StateStore
@@ -100,6 +101,26 @@ def _old_thread():
               "reply_count": 1, "latest_reply": reply_ts}
     reply = {"ts": reply_ts, "user": "U2", "text": "reply", "thread_ts": parent_ts}
     return ThreadHS([parent], {parent_ts: [reply]}), parent_ts, reply_ts, cursor
+
+
+class GoneChannelHS(ThreadHS):
+    """Fake HS where one channel no longer exists."""
+
+    async def conversations_history(self, channel, **kw):
+        if channel == "C_GONE":
+            raise SlackApiError("conversations.history", "channel_not_found")
+        return await super().conversations_history(channel, **kw)
+
+
+async def test_missing_channel_does_not_stop_the_poll(store):
+    msg = {"ts": _ago(10), "user": "U1", "text": "still here"}
+    cfg = make_config()
+    cfg.channels.insert(0, ChannelMap("C_GONE", "C_DST2", "dm-gone"))
+    await store.set_last_ts("C_GONE", _ago(60))
+    await store.set_last_ts("C_SRC", _ago(60))
+    q: asyncio.Queue = asyncio.Queue()
+    assert await SourceReader(GoneChannelHS([msg]), cfg, store, q).poll_once() == 1
+    assert [e.text for e in _drain(q)] == ["still here"]
 
 
 async def test_plain_poll_cannot_see_reply_to_old_thread(store):

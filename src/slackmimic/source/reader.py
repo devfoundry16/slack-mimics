@@ -23,7 +23,7 @@ import time
 from collections import OrderedDict
 from typing import Any, Awaitable, Callable, Optional
 
-from ..client_hs import AuthError, HeartStampClient
+from ..client_hs import AuthError, HeartStampClient, SlackApiError
 from ..config import Config
 from ..models import EventKind, SourceEvent
 from ..state.store import StateStore
@@ -88,7 +88,13 @@ class SourceReader:
         """
         total = 0
         for channel in self._config.source_channels:
-            total += await self._poll_channel(channel, rescan_threads)
+            # One unreadable channel (e.g. a DM that no longer exists) must not
+            # stop the rest from being polled. Network and auth errors still
+            # propagate.
+            try:
+                total += await self._poll_channel(channel, rescan_threads)
+            except SlackApiError as exc:
+                log.warning("channel %s: poll skipped: %s", channel, exc)
         return total
 
     async def _poll_channel(self, channel: str, rescan_threads: bool = False) -> int:

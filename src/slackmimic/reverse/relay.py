@@ -57,11 +57,21 @@ def build_relay_app(config: Config, store: StateStore, hs_client: HeartStampClie
 
     @app.event("message")
     async def on_message(event: dict[str, Any], client, logger) -> None:
+        channel = str(event.get("channel", ""))
         if not is_eligible(event):
+            log.info(
+                "reverse relay: ignored message in %s (subtype=%s bot=%s app=%s user=%s)",
+                channel,
+                event.get("subtype"),
+                bool(event.get("bot_id")),
+                bool(event.get("app_id")),
+                bool(event.get("user")),
+            )
             return
-        source = config.source_for(event["channel"])
+        source = config.source_for(channel)
         if not source:
-            return  # message in a channel that isn't mapped for relay
+            log.info("reverse relay: ignored message in unmapped channel %s", channel)
+            return
         thread_ts = str(event.get("thread_ts") or "")
         if thread_ts == str(event["ts"]):
             thread_ts = ""  # a thread's own root isn't a reply
@@ -93,6 +103,7 @@ def build_relay_app(config: Config, store: StateStore, hs_client: HeartStampClie
             text=f"Message pending approval for #{label}",
         )
         await store.set_pending_card(pending.id, card_channel, str(res["ts"]))
+        log.info("reverse relay: approval card posted for #%s (%s)", label, pending.target_ts)
 
     @app.action(cards.ACTION_REVIEW)
     async def on_review(ack, body, client) -> None:

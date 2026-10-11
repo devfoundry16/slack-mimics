@@ -90,3 +90,73 @@ def test_rtm_reaction_added():
 
 def test_rtm_ignored_event():
     assert normalize.rtm_event_to_event({"type": "user_typing"}) is None
+
+
+def _share(**extra):
+    att = {
+        "is_share": True,
+        "author_id": "U9",
+        "author_name": "Bea",
+        "footer": "Posted in a private conversation",
+        "text": "line one\nline two",
+        "fallback": "[Oct 10th] Bea: line one",
+    }
+    att.update(extra)
+    return att
+
+
+def test_forwarded_message_without_comment_renders_quote():
+    evt = normalize.message_to_event(
+        "C1", {"ts": "1.1", "user": "U1", "text": "", "attachments": [_share()]}
+    )
+    assert evt.text == (
+        ">*Forwarded from <@U9>* · _Posted in a private conversation_\n"
+        ">line one\n"
+        ">line two"
+    )
+
+
+def test_forwarded_message_keeps_comment_above_quote():
+    evt = normalize.message_to_event(
+        "C1", {"ts": "1.1", "user": "U1", "text": "look", "attachments": [_share()]}
+    )
+    assert evt.text.startswith("look\n>*Forwarded from <@U9>*")
+
+
+def test_forwarded_message_falls_back_to_author_name_and_fallback_text():
+    att = _share(author_id=None, footer=None, text="")
+    evt = normalize.message_to_event("C1", {"ts": "1.1", "text": "", "attachments": [att]})
+    assert evt.text == ">*Forwarded from Bea*\n>[Oct 10th] Bea: line one"
+
+
+def test_forwarded_message_files_are_mirrored():
+    att = _share(files=[{"id": "F2", "name": "b.png", "url_private": "http://x/b"}])
+    evt = normalize.message_to_event("C1", {"ts": "1.1", "text": "", "attachments": [att]})
+    assert [f.name for f in evt.files] == ["b.png"]
+
+
+def test_message_link_unfurl_is_rendered():
+    att = _share(is_share=None, is_msg_unfurl=True)
+    evt = normalize.message_to_event("C1", {"ts": "1.1", "text": "", "attachments": [att]})
+    assert ">line one" in evt.text
+
+
+def test_link_unfurl_attachment_is_ignored():
+    att = {"title": "Example", "title_link": "https://example.com", "text": "preview"}
+    evt = normalize.message_to_event(
+        "C1", {"ts": "1.1", "text": "<https://example.com>", "attachments": [att]}
+    )
+    assert evt.text == "<https://example.com>"
+
+
+def test_rtm_message_changed_renders_forward():
+    evt = normalize.rtm_event_to_event(
+        {
+            "type": "message",
+            "subtype": "message_changed",
+            "channel": "C1",
+            "message": {"ts": "1.1", "user": "U1", "text": "", "attachments": [_share()]},
+        }
+    )
+    assert evt.kind == EventKind.EDIT
+    assert ">line two" in evt.text
