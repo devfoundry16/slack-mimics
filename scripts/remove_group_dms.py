@@ -76,6 +76,8 @@ async def _main(args: argparse.Namespace) -> int:
         use_websocket=bool(cfg.get("use_websocket", True)),
         db_path=str(cfg.get("db_path", "slackmimic.sqlite3")),
         backfill_days=float(cfg.get("backfill_days", 0.0)),
+        reverse_enabled=bool(cfg.get("reverse_enabled", False)),
+        owner_member_id=str(cfg.get("owner_member_id") or ""),
     )
     Path(args.config).write_text(out, encoding="utf-8")
 

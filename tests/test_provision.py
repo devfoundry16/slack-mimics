@@ -2,6 +2,7 @@ import pytest
 
 from slackmimic.provision import (
     ProvisionResult,
+    describe_source_channel,
     list_source_dms,
     normalize_channel_name,
     provision,
@@ -137,3 +138,43 @@ async def test_provision_existing_private_needs_invite():
     result = await provision(hs, target, throttle_seconds=0)
     assert result.mappings == [("C_A", "C_OLD", "vip")]
     assert "vip" in result.needs_invite
+
+
+def test_render_config_yaml_keeps_reverse_settings():
+    out = render_config_yaml(
+        [("C_SRC1", "C_DST1", "general")], reverse_enabled=True, owner_member_id="U_OWNER"
+    )
+    assert "reverse_enabled: true" in out
+    assert "owner_member_id: U_OWNER" in out
+    assert "reverse_enabled" not in render_config_yaml([("C_SRC1", "C_DST1", "general")])
+
+
+class InfoFakeHS:
+    def __init__(self, channel, users=None):
+        self._channel = channel
+        self._users = users or {}
+
+    async def conversations_info(self, channel):
+        return {"channel": self._channel}
+
+    async def users_info(self, user):
+        return {"user": {"profile": {"display_name": self._users.get(user, user)}}}
+
+
+async def test_describe_source_channel_group_dm_gets_short_private_name():
+    hs = InfoFakeHS({"id": "C0C09L0KA1X", "is_mpim": True,
+                     "name": "mpdm-bozhidar.hristov--john.oliveira--tega.biokoro-1"})
+    src = await describe_source_channel(hs, "C0C09L0KA1X")
+    assert src.name == "gdm-bozhidar-tega-ka1x"
+    assert src.is_private is True
+
+
+async def test_describe_source_channel_im_and_regular():
+    im = await describe_source_channel(
+        InfoFakeHS({"id": "D1", "is_im": True, "user": "U_A"}, {"U_A": "Alice"}), "D1"
+    )
+    assert (im.name, im.is_private) == ("dm-Alice", True)
+    ch = await describe_source_channel(
+        InfoFakeHS({"id": "C1", "name": "general", "is_private": False}), "C1"
+    )
+    assert (ch.name, ch.is_private) == ("general", False)

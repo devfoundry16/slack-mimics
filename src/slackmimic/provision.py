@@ -153,6 +153,28 @@ async def list_source_dms(
     return out
 
 
+async def describe_source_channel(hs: HeartStampClient, channel_id: str) -> SourceChannel:
+    """Resolve one source conversation id to a SourceChannel named for the target.
+
+    Group DMs get a short ``gdm-…`` name, 1:1 DMs ``dm-<name>``, and regular
+    channels keep their own name. DMs and group DMs are always private.
+    """
+    body = await hs.conversations_info(channel_id)
+    ch = body.get("channel") or {}
+    cid = str(ch.get("id") or channel_id)
+    if ch.get("is_mpim"):
+        return SourceChannel(
+            id=cid, name=short_group_name(str(ch.get("name") or cid), cid), is_private=True
+        )
+    if ch.get("is_im"):
+        other = ch.get("user")
+        name = await _display_name(hs, other) if other else cid
+        return SourceChannel(id=cid, name=f"dm-{name}", is_private=True)
+    return SourceChannel(
+        id=cid, name=str(ch.get("name") or cid), is_private=bool(ch.get("is_private"))
+    )
+
+
 async def provision(
     hs: HeartStampClient,
     target: TargetClient,
@@ -223,15 +245,20 @@ def render_config_yaml(
     use_websocket: bool = True,
     db_path: str = "slackmimic.sqlite3",
     backfill_days: float = 0.0,
+    reverse_enabled: bool = False,
+    owner_member_id: str = "",
 ) -> str:
     lines = [
         f"db_path: {db_path}",
         f"poll_interval_seconds: {poll_interval_seconds}",
         f"use_websocket: {str(use_websocket).lower()}",
         f"backfill_days: {backfill_days:g}",
-        "",
-        "channels:",
     ]
+    if reverse_enabled:
+        lines.append("reverse_enabled: true")
+    if owner_member_id:
+        lines.append(f"owner_member_id: {owner_member_id}")
+    lines += ["", "channels:"]
     for source_id, target_id, label in mappings:
         lines.append(f"  - source: {source_id}")
         lines.append(f"    target: {target_id}")

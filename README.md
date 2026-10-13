@@ -266,6 +266,20 @@ and drops them from `config.yaml`, keeping regular channels + 1:1 DMs):
 uv run python scripts/remove_group_dms.py --env .env    # preview with --dry-run first
 ```
 
+**Mirror just one group chat.** Instead of copying every group DM, pick one by id
+(open it in HeartStamp in the browser; the id is the last `C…`/`G…` part of the
+URL). It becomes a private channel in your workspace, is added to `config.yaml`,
+and the members you list are invited (plus `owner_member_id`, unless `--no-owner`):
+
+```bash
+uv run python scripts/mirror_channel.py C0XXXXXXX --user U0AAA,U0BBB --env .env
+uv run python scripts/mirror_channel.py C0XXXXXXX --email a@x.com --name gdm-launch --dry-run
+```
+
+Member ids are from **your** workspace (`--email` needs the `users:read.email`
+scope). Re-running with an already-mirrored id only sends the invites. Restart
+the mirror afterwards so it starts copying the new channel.
+
 ---
 
 ## 12. Invite yourself
@@ -457,6 +471,7 @@ you move it.)
 | `scripts/provision_dms.py [--dry-run] [--exclude name]` | Add DMs / group DMs to the mapping. |
 | `scripts/rename_dms.py [--dry-run]` | Shorten group-DM channel names. |
 | `scripts/remove_group_dms.py [--dry-run]` | Archive group DMs + drop from config. |
+| `scripts/mirror_channel.py C… --user U… [--email …] [--name …]` | Mirror one group chat as a private channel + invite members. |
 | `scripts/invite_me.py --user U… \| --email you@…` | Add yourself to all mapped channels. |
 | `scripts/set_cursor_now.py D… [D… …]` | Skip backfill for specific channels. |
 | `scripts/send_test.py --channel C… --text "…"` | Post one test message as the bot. |

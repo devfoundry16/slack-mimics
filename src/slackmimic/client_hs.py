@@ -185,6 +185,10 @@ class HeartStampClient:
         """Look up a single user's profile."""
         return await self._call("users.info", user=user)
 
+    async def conversations_info(self, channel: str) -> dict[str, Any]:
+        """Look up a single conversation (channel, DM or group DM)."""
+        return await self._call("conversations.info", channel=channel)
+
     async def users_conversations(
         self,
         *,
